@@ -76,7 +76,15 @@ async def running_plugin(tmp_path: Path, name: str, values: dict, secrets: dict 
     configs = ConfigStore(tmp_path / "config", box)
     audit = AuditLog(tmp_path / "audit.jsonl")
     configs.save(name, values=values, new_secrets=secrets or {}, policy=policy)
-    mgr = PluginManager(plugins_dir, tmp_path / "data", configs, audit)
+    try:  # hosts from 0.2.0 record usage statistics; older ones have no such module
+        from mcpopus.stats import Stats
+        from mcpopus.store import Store
+
+        stats = Stats(Store(tmp_path / "stats.db"))
+    except ImportError:
+        stats = None
+    mgr = PluginManager(plugins_dir, tmp_path / "data", configs, audit, **({"stats": stats} if stats else {}))
+    mgr.stats = stats
     mgr.discover()
     await mgr.load(name)
     lp = mgr.get(name)

@@ -209,6 +209,15 @@ class Obsidian(Plugin):
         except (PathError, WriteRefused, CouchError, LiveSyncError) as e:  # Conflict is a CouchError
             raise ToolError(str(e)[0].upper() + str(e)[1:]) from None
 
+    def _count(self, name: str, amount: float = 1) -> None:
+        """Usage counters shown on the plugin's page. Older hosts have no ctx.stats; counting is then skipped."""
+        stats = getattr(self.ctx, "stats", None)
+        if stats is not None:
+            try:
+                stats.count(name, amount)
+            except Exception:  # noqa: BLE001 - statistics must never break a write
+                pass
+
     @tool(tier="write")
     async def write_note(self, path: str, content: str) -> str:
         """Create a note, or REPLACE the whole note at that path. Use edit_note to change part of a note."""
@@ -221,6 +230,8 @@ class Obsidian(Plugin):
         except (PathError, WriteRefused, CouchError, LiveSyncError) as e:
             raise ToolError(str(e)) from None
         meta = await self._write(v.put_note(path, content))
+        self._count("notes_replaced" if existed else "notes_created")
+        self._count("bytes_written", len(content.encode()))
         return f"Note {'replaced' if existed else 'created'}: {meta.path}\n[Open in Obsidian]({self._link(meta.path)})"
 
     @tool(tier="write")
@@ -250,12 +261,15 @@ class Obsidian(Plugin):
         else:
             new = text + content if text.endswith("\n") or not text else text + "\n" + content
         saved = await self._write(v.put_note(path, new, base_rev=meta.rev, must_exist=True))
+        self._count("notes_edited")
+        self._count("bytes_written", len(new.encode()))
         return f"Note edited ({operation}): {saved.path}\n[Open in Obsidian]({self._link(saved.path)})"
 
     @tool(tier="write")
     async def move_note(self, from_path: str, to_path: str) -> str:
         """Move or rename a note (both paths must be writable). Fails if something already exists at to_path."""
         saved = await self._write(self.vault.move(from_path, to_path))
+        self._count("notes_moved")
         return f"Moved: {from_path} -> {saved.path}\n[Open in Obsidian]({self._link(saved.path)})"
 
     @tool(tier="admin")
@@ -268,6 +282,7 @@ class Obsidian(Plugin):
         except (PathError, WriteRefused, CouchError, LiveSyncError) as e:
             raise ToolError(str(e)) from None
         await self._write(v.soft_delete(path))
+        self._count("notes_deleted")
         return f"Deleted: {path}"
 
     @tool(tier="read")

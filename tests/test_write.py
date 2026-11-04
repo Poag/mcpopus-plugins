@@ -309,3 +309,16 @@ async def test_unsupported_encryption_layouts_are_refused_with_the_reason(couch,
         err, text = await call(c, "write_note", {"path": "Scratch/x.md", "content": "x"})
         assert err and "layout writing does not support" in text and "v2" in text and "reading still works" in text
     assert couch.writes == []
+
+
+async def test_write_counters_reach_the_host_statistics(couch, tmp_path):
+    async with await run(couch, tmp_path) as (c, _, mgr):
+        if mgr.stats is None:
+            pytest.skip("this host has no usage statistics")
+        await call(c, "write_note", {"path": "Scratch/S.md", "content": "12345"})
+        await call(c, "write_note", {"path": "Scratch/S.md", "content": "123456"})
+        await call(c, "edit_note", {"path": "Scratch/S.md", "content": "x", "operation": "append"})
+        got = mgr.stats.counters("obsidian")
+        assert got["notes_created"] == 1 and got["notes_replaced"] == 1 and got["notes_edited"] == 1
+        assert got["bytes_written"] >= 5 + 6
+        assert mgr.stats.totals(1, plugin="obsidian")["calls"] >= 3
