@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install the host and test dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
+
+  interop:
+    # Fixtures are written by the real LiveSync JavaScript crypto code, then the Python reader must decode them.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Generate fixtures with octagonal-wheels
+        working-directory: tools
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node gen_fixtures.mjs
+      - name: Install the host and test dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+      - name: Interop tests (a missing fixture is a failure)
+        env:
+          REQUIRE_FIXTURES: "1"
+        run: .venv/bin/python -m pytest tests/test_interop.py -q
+      - name: Have the plugin write encrypted chunks, then decrypt them with the real LiveSync code
+        env:
+          WRITE_FIXTURES: "1"
+        run: |
+          .venv/bin/python -m pytest tests/test_interop.py -q -k write_fixture
+          node tools/verify_written.mjs

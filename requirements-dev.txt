@@ -1,0 +1,4 @@
+# The host the plugins run in. CI installs it from the repository at the commit named here.
+mcpopus @ git+https://github.com/Poag/mcpopus@main
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1

@@ -1,0 +1,11 @@
+{
+  "name": "mcpopus-plugins-fixtures",
+  "private": true,
+  "type": "module",
+  "description": "Generates test fixtures with the real LiveSync crypto code (octagonal-wheels). Not part of the plugin runtime.",
+  "dependencies": {
+    "octagonal-wheels": "0.1.47",
+    "fflate": "0.8.2",
+    "xxhash-wasm": "1.1.0"
+  }
+}
