@@ -13,13 +13,15 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | Run the host itself | [mcpopus: docs/DEPLOY.md](https://github.com/Poag/mcpopus/blob/main/docs/DEPLOY.md) |
 | Write my own plugin | [mcpopus: docs/PLUGINS.md](https://github.com/Poag/mcpopus/blob/main/docs/PLUGINS.md) |
 | Understand how the Obsidian plugin works | [docs/DESIGN.md](docs/DESIGN.md) |
+| Set up the Gmail (IMAP) plugin | [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md) |
 | Check what is trusted and what is not | [mcpopus: docs/SECURITY.md](https://github.com/Poag/mcpopus/blob/main/docs/SECURITY.md) |
 
 | Plugin | What it does | State |
 | --- | --- | --- |
 | [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags; folder-limited write, move and delete (off by default) |
+| [`email`](plugins/email) | Read a mailbox over IMAP, built for Gmail with an app password: list, search and read messages | Read-only: nothing is marked read, moved or deleted. No write tools |
 
-Design and specification: [docs/DESIGN.md](docs/DESIGN.md). Third-party notices: [NOTICE.md](NOTICE.md).
+Design and specification: [docs/DESIGN.md](docs/DESIGN.md) and [docs/email.md](docs/email.md). Gmail set-up: [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md). Third-party notices: [NOTICE.md](NOTICE.md).
 
 ## Install
 

@@ -1,0 +1,4 @@
+name = "email"
+version = "0.1.0"
+description = "Read a mailbox over IMAP (built for Gmail with an app password): list, search and read messages. Read-only; nothing is marked read or changed."
+min_host_version = "0.1.0"

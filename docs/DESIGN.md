@@ -5,14 +5,14 @@ design for the plugin collection and the specification of its first plugin, `obs
 (`docs/PLUGINS.md`, `docs/SECURITY.md` in that repository) define the plugin API and trust model and are not repeated.
 
 Status: `obsidian` 0.2.0 reads and, when enabled, writes. Reads ran against Alex's real database on 4 Nov 2026 (298 notes, matched
-the existing connector). **Writes have only been tested against a simulated CouchDB**; follow section 4.11 before enabling them on the real vault. Email (IMAP) and proxy are outlines only.
+the existing connector). **Writes have only been tested against a simulated CouchDB**; follow section 4.11 before enabling them on the real vault. Email (IMAP) is built read-only (0.1.0); proxy is an outline only.
 
 ## 1. Scope and conventions
 
 | Plugin | Endpoint | State |
 | --- | --- | --- |
 | `obsidian` | `/obsidian` | read and write tools built (0.2.1); writes untested against real LiveSync clients (section 4.9) |
-| `email` (IMAP) | `/email` | outline (section 5) |
+| `email` (IMAP, Gmail) | `/email` | read tools built (0.1.0), see [email.md](email.md) |
 | `proxy` | `/<name>` | outline (section 6) |
 
 Repository layout:
@@ -327,20 +327,10 @@ Reads (the original steps):
 4. Is a persistent index needed (vault size growth, Pi 4 speed)? Measure after step 2.
 5. Do any notes exceed 2 MB or use attachments that should be listed?
 
-## 5. Plugin: `email` (IMAP) — outline
+## 5. Plugin: `email` (IMAP, Gmail)
 
-Follows the host design (vault note *mcpopus*): settings entered in the admin form, **read-only first**.
-
-- Config: host, port, TLS mode (`imaps` or STARTTLS; plaintext refused), username, `password` (secret, app password), folders the
-  plugin may see, result size cap.
-- Tools (all read, all `untrusted=True`): `list_messages(folder, limit, unseen_only)`, `search_messages(...)`, `read_message(folder, uid)`
-  returning headers and a text body with HTML stripped and attachments listed by name and size only; `mark nothing`, no
-  flags changed (use `EXAMINE`/read-only select and `BODY.PEEK`).
-- Output: strip or neutralise remote-content links; cap per message; never return attachments.
-- Library: stdlib `imaplib` in a worker thread, or a dependency added to the host first (to be decided with the first read of the
-  provider's behaviour). Nothing chosen or verified yet.
-- Mailbox provider still undecided (vault note, open question 4). SMTP drafts and sending are a later release behind a recipient allowlist.
-- No push: MCP is request and response.
+Specified in [email.md](email.md): read-only mailbox access over IMAP with an app password, standard library only, no write tools.
+SMTP drafts and sending are a later release behind a recipient allowlist, and no push (MCP is request and response).
 
 ## 6. Plugin: `proxy` — outline
 
