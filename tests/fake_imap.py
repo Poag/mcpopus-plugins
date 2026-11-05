@@ -85,6 +85,7 @@ class FakeImap:
         self._dir = Path(d)
         (self._dir / "c.pem").write_text(self.cert_pem)
         (self._dir / "k.pem").write_bytes(self._key_pem)
+        self.list_style = "normal"  # normal | atoms | empty | no_inbox | percent_only
         self.fail_with: str | None = None  # "drop" closes the connection after login
 
     def add(self, box: str, attrs: str = "", msgs: list[Msg] | None = None) -> None:
@@ -144,10 +145,20 @@ class FakeImap:
                 elif not state["auth"]:
                     send(f"{tag} BAD not signed in\r\n")
                 elif up == "LIST":
-                    for name, b in self.boxes.items():
-                        enc = name.replace("\\", "\\\\").replace('"', '\\"')
-                        send(f'* LIST ({b["attrs"]}) "/" "{enc}"\r\n')
-                    send(f"{tag} OK listed\r\n")
+                    pattern = tokens(args)[-1]
+                    style = self.list_style
+                    if style == "empty" or (style == "percent_only" and pattern == "*"):
+                        send(f"{tag} OK listed\r\n")
+                    else:
+                        for name, b in self.boxes.items():
+                            if style == "no_inbox" and name == "INBOX":
+                                continue
+                            if style == "atoms" and " " not in name and '"' not in name:
+                                send(f'* LIST ({b["attrs"]}) NIL {name}\r\n')
+                                continue
+                            enc = name.replace("\\", "\\\\").replace('"', '\\"')
+                            send(f'* LIST ({b["attrs"]}) "/" "{enc}"\r\n')
+                        send(f"{tag} OK listed\r\n")
                 elif up == "EXAMINE":
                     name = tokens(args)[0]
                     if name not in self.boxes:

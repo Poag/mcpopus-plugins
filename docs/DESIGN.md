@@ -5,14 +5,14 @@ design for the plugin collection and the specification of its first plugin, `obs
 (`docs/PLUGINS.md`, `docs/SECURITY.md` in that repository) define the plugin API and trust model and are not repeated.
 
 Status: `obsidian` 0.2.0 reads and, when enabled, writes. Reads ran against Alex's real database on 4 Nov 2026 (298 notes, matched
-the existing connector). **Writes have only been tested against a simulated CouchDB**; follow section 4.11 before enabling them on the real vault. Email (IMAP) is built read-only (0.1.0); proxy is an outline only.
+the existing connector). **Writes have only been tested against a simulated CouchDB**; follow section 4.11 before enabling them on the real vault. Email (IMAP) is built read-only (0.1.1); proxy is an outline only.
 
 ## 1. Scope and conventions
 
 | Plugin | Endpoint | State |
 | --- | --- | --- |
 | `obsidian` | `/obsidian` | read and write tools built (0.2.1); writes untested against real LiveSync clients (section 4.9) |
-| `email` (IMAP, Gmail) | `/email` | read tools built (0.1.0), see [email.md](email.md) |
+| `email` (generic IMAP) | `/email` | read tools built (0.1.1), see [email.md](email.md) |
 | `proxy` | `/<name>` | outline (section 6) |
 
 Repository layout:
@@ -327,9 +327,9 @@ Reads (the original steps):
 4. Is a persistent index needed (vault size growth, Pi 4 speed)? Measure after step 2.
 5. Do any notes exceed 2 MB or use attachments that should be listed?
 
-## 5. Plugin: `email` (IMAP, Gmail)
+## 5. Plugin: `email` (generic IMAP)
 
-Specified in [email.md](email.md): read-only mailbox access over IMAP with an app password, standard library only, no write tools.
+Specified in [email.md](email.md): read-only mailbox access over any IMAP server with a password or app password, standard library only, no write tools.
 SMTP drafts and sending are a later release behind a recipient allowlist, and no push (MCP is request and response).
 
 ## 6. Plugin: `proxy` — outline

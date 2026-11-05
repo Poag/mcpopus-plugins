@@ -71,10 +71,36 @@ async def test_only_read_tools_exist_and_all_content_is_untrusted(imap, tmp_path
 async def test_status_and_mailboxes_hide_blocked_ones(imap, tmp_path):
     async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, _, _):
         err, text = await call(c, "mailbox_status")
-        assert not err and "Signed in to 127.0.0.1" in text and "5 mailboxes" in text
+        assert not err and "Signed in to 127.0.0.1" in text and "5 are visible" in text and "2 are hidden" in text and "0 were not understood" in text
         err, text = await call(c, "list_mailboxes")
         assert "- INBOX" in text and "[Gmail]/All Mail (\\All)" in text and "[Gmail]/Sent Mail (\\Sent)" in text
         assert "Spam" not in text and "Trash" not in text and "Projects/über" in text
+
+
+@pytest.mark.parametrize("style", ["atoms", "no_inbox", "percent_only"])
+async def test_servers_that_list_mailboxes_differently_still_work(imap, tmp_path, style):
+    imap.list_style = style
+    async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, _, _):
+        _, text = await call(c, "mailbox_status")
+        assert "INBOX" not in text and "5 are visible" in text or style == "no_inbox"
+        _, text = await call(c, "list_messages")
+        assert "INBOX:4 " in text
+        _, text = await call(c, "list_mailboxes")
+        assert "- INBOX" in text
+
+
+async def test_status_explains_why_nothing_is_visible(imap, tmp_path):
+    imap.list_style = "empty"
+    imap.boxes = {"INBOX": imap.boxes["INBOX"]}
+    async with running_plugin(tmp_path / "a", "email", values(imap, blocked_mailboxes=["INBOX"]), SECRETS) as (c, _, _):
+        _, text = await call(c, "mailbox_status")
+        assert "0 are visible" in text and "readable_mailboxes or blocked_mailboxes settings" in text
+        err, text = await call(c, "list_messages")
+        assert err and "No such mailbox" in text
+    imap.boxes.clear()
+    async with running_plugin(tmp_path / "b", "email", values(imap), SECRETS) as (c, _, _):
+        _, text = await call(c, "mailbox_status")
+        assert "0 are visible" in text and "no mailboxes and INBOX could not be opened" in text
 
 
 async def test_list_messages_newest_first_with_unread_markers(imap, tmp_path):

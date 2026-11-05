@@ -1,6 +1,6 @@
 # email
 
-Read a mailbox over IMAP, built for Gmail with an app password: list mailboxes, list and search messages, read one. The plugin only
+Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list mailboxes, list and search messages, read one. The plugin only
 reads. Mailboxes are opened read-only and bodies fetched without marking anything as read, and it has no write or admin tools.
 
 - Set-up and troubleshooting: [docs/GUIDE_EMAIL.md](../../docs/GUIDE_EMAIL.md)

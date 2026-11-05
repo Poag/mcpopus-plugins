@@ -89,7 +89,7 @@ class ImapBackend:
         except ssl.SSLCertVerificationError:
             raise MailError("The mail server's certificate was not accepted. Check imap_host, or set ca_certificate for a private server.") from None
         except ssl.SSLError:
-            raise MailError("The TLS handshake with the mail server failed. Check imap_host and imap_port (993 for Gmail).") from None
+            raise MailError("The TLS handshake with the mail server failed. Check imap_host and imap_port (993 for most providers).") from None
         except (TimeoutError, OSError):
             raise MailError("Cannot reach the mail server. Check imap_host and imap_port, and that the host can make outbound connections.") from None
         except (imaplib.IMAP4.error, EOFError):
@@ -99,7 +99,7 @@ class ImapBackend:
             conn.login(s.username, s.password)
         except imaplib.IMAP4.error:
             self._close(conn)
-            raise MailError("The mail server refused the sign-in. Check the username and password settings. Gmail needs an app password, not the account password.") from None
+            raise MailError("The mail server refused the sign-in. Check the username and password settings. Some providers (Gmail among them) need an app password rather than the account password.") from None
         except (UnicodeError, ValueError):
             self._close(conn)
             raise MailError("The password setting holds characters the login cannot send. Check it.") from None
@@ -152,35 +152,64 @@ class ImapBackend:
             return False
         return not s.readable or any(_under(name, r) for r in s.readable)
 
+    _LIST_LINE = re.compile(r'\((?P<attrs>[^)]*)\)\s+(?P<delim>"(?:[^"\\]|\\.)*"|NIL)\s+(?P<name>.+)$', re.I)
+
+    def _scan(self, conn) -> tuple[list[Mailbox], int, int]:
+        """Ask the server for every mailbox. Returns (selectable mailboxes, lines received, lines not understood)."""
+        found: dict[str, Mailbox] = {}
+        received = unparsed = 0
+        for pattern in ("*", "%"):  # some servers answer only one of the two
+            typ, data = conn.list('""', pattern)
+            if typ != "OK":
+                continue
+            for item in data or []:
+                if item is None:
+                    continue
+                if isinstance(item, tuple):  # the name arrived as a literal
+                    text = item[0].decode("utf-8", "replace") + '"' + item[1].decode("utf-8", "replace").replace('"', "") + '"'
+                else:
+                    text = item.decode("utf-8", "replace")
+                if not text.strip():
+                    continue
+                received += 1
+                m = self._LIST_LINE.match(text.strip())
+                if not m:
+                    unparsed += 1
+                    continue
+                raw = m.group("name").strip()
+                if len(raw) >= 2 and raw.startswith('"') and raw.endswith('"'):
+                    raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
+                attrs = tuple(a for a in m.group("attrs").split() if a)
+                if "\\noselect" in {a.casefold() for a in attrs}:
+                    continue
+                found.setdefault(raw, Mailbox(utf7.decode(raw), raw, attrs))
+            if found:
+                break
+        if not any(b.name.upper() == "INBOX" for b in found.values()):
+            # Every IMAP server has an INBOX. If it is missing from the list, try opening it.
+            try:
+                typ, _ = conn.select('"INBOX"', readonly=True)
+            except (imaplib.IMAP4.error, OSError):
+                typ = "NO"
+            if typ == "OK":
+                found["INBOX"] = Mailbox("INBOX", "INBOX", ())
+        return list(found.values()), received, unparsed
+
     def _list(self, conn, s: Settings) -> list[Mailbox]:
-        typ, data = conn.list()
-        if typ != "OK":
-            raise MailError("The mail server would not list mailboxes.")
-        out: list[Mailbox] = []
-        for item in data or []:
-            if isinstance(item, tuple):  # name sent as a literal
-                line, name = item[0], item[1]
-                text = line.decode("utf-8", "replace") + '"' + name.decode("utf-8", "replace").replace('"', "") + '"'
-            elif item is None:
-                continue
-            else:
-                text = item.decode("utf-8", "replace")
-            m = re.match(r'\((?P<attrs>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', text.strip())
-            if not m:
-                continue
-            raw = m.group("name").strip()
-            if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
-                raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
-            attrs = tuple(a for a in m.group("attrs").split() if a)
-            if "\\noselect" in {a.casefold() for a in attrs}:
-                continue
-            name = utf7.decode(raw)
-            if self._visible(s, name):
-                out.append(Mailbox(name, raw, attrs))
-        return out
+        return [b for b in self._scan(conn)[0] if self._visible(s, b.name)]
 
     async def list_mailboxes(self) -> list[Mailbox]:
         return await self._run(self._list)
+
+    async def mailbox_report(self) -> dict[str, int]:
+        """Counts only: what the server listed and how many the settings hide. Used by mailbox_status."""
+
+        def work(conn, s: Settings):
+            boxes, received, unparsed = self._scan(conn)
+            visible = [b for b in boxes if self._visible(s, b.name)]
+            return {"received": received, "unparsed": unparsed, "usable": len(boxes), "visible": len(visible), "hidden": len(boxes) - len(visible)}
+
+        return await self._run(work)
 
     @staticmethod
     def _resolve(boxes: list[Mailbox], wanted: str) -> Mailbox:

@@ -1,4 +1,4 @@
-"""email: read-only mailbox access over IMAP, built for Gmail with an app password. Design: docs/email.md."""
+"""email: read-only mailbox access over any IMAP server (Gmail, AgentMail, Fastmail and others). Design: docs/email.md."""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class Config(BaseModel):
-    imap_host: str = Field("imap.gmail.com", description="IMAP server host name only, for example imap.gmail.com (no https://, no port)")
-    imap_port: int = Field(993, ge=1, le=65535, description="IMAP over TLS port (993 for Gmail)")
-    username: str = Field(description="The full mailbox address, for example claude.mail@gmail.com")
-    password: SecretStr = Field(description="For Gmail an app password (the account needs 2-step verification). Not the account password")
-    ca_certificate: str = Field("", max_length=20_000, description="Extra certificate authority in PEM form, for a private mail server. Leave empty for Gmail")
+    imap_host: str = Field(description="IMAP server host name only, for example imap.gmail.com or imap.fastmail.com (no https://, no port)")
+    imap_port: int = Field(993, ge=1, le=65535, description="IMAP over TLS port (993 for most providers)")
+    username: str = Field(description="The IMAP login name, usually the full mailbox address")
+    password: SecretStr = Field(description="The IMAP password. Gmail and several other providers need an app password rather than the account password")
+    ca_certificate: str = Field("", max_length=20_000, description="Extra certificate authority in PEM form, for a private mail server. Leave empty for public providers")
     readable_mailboxes: list[str] = Field([], description="Only these mailboxes (and those below them) are visible, one per line. Empty means all except the blocked ones")
-    blocked_mailboxes: list[str] = Field(["[Gmail]/Spam", "[Gmail]/Trash"], description="Never visible, whatever else is set, one per line. Gmail labels are mailboxes")
+    blocked_mailboxes: list[str] = Field(["Spam", "Junk", "Trash", "Deleted Items", "[Gmail]/Spam", "[Gmail]/Trash"], description="Never visible (nor anything below them), whatever else is set, one per line. Replacing this list removes the defaults")
     max_body_chars: int = Field(20_000, ge=1_000, le=200_000, description="Most characters of message text returned by read_message")
     max_fetch_bytes: int = Field(2_000_000, ge=10_000, le=25_000_000, description="Most bytes downloaded for one message; a larger message is read from its start")
     timeout_seconds: int = Field(20, ge=3, le=120, description="Seconds to wait for the mail server")
@@ -95,13 +95,23 @@ class Email(Plugin):
     @tool(tier="read")
     async def mailbox_status(self) -> str:
         """Check that the mail account can be reached and signed in to. Returns counts only, no message content."""
-        boxes = await self._guard(self.backend.list_mailboxes())
+        r = await self._guard(self.backend.mailbox_report())
         c = self.ctx.config
-        return f"Signed in to {c.imap_host} as {c.username}. {len(boxes)} mailboxes are visible to this connector. The connector can only read: nothing is marked read, moved or deleted."
+        text = (f"Signed in to {c.imap_host} as {c.username}. The server listed {r['received']} mailbox entries; {r['usable']} can be opened, "
+                f"{r['visible']} are visible to this connector, {r['hidden']} are hidden by the readable_mailboxes and blocked_mailboxes settings, "
+                f"{r['unparsed']} were not understood. The connector can only read: nothing is marked read, moved or deleted.")
+        if r["visible"] == 0:
+            if r["hidden"]:
+                text += " Nothing is visible because of the readable_mailboxes or blocked_mailboxes settings: check them (INBOX must be allowed)."
+            elif r["unparsed"]:
+                text += " The server's mailbox list is in a form this plugin does not understand: report this."
+            else:
+                text += " The server reported no mailboxes and INBOX could not be opened: check that the account has a mailbox and that this host and port are its IMAP service."
+        return text
 
     @tool(tier="read")
     async def list_mailboxes(self) -> str:
-        """List the visible mailboxes. In Gmail every label is a mailbox, and the special ones are marked (\\All, \\Sent, \\Drafts)."""
+        """List the visible mailboxes (folders; in Gmail every label is a mailbox). Special-use mailboxes are marked, for example \\Sent or \\All."""
         boxes = await self._guard(self.backend.list_mailboxes())
         lines = []
         for b in boxes:
