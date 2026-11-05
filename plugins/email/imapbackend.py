@@ -1,7 +1,7 @@
-"""IMAP access with the standard library. Read-only: mailboxes are opened with EXAMINE and bodies fetched with BODY.PEEK.
+"""IMAP access with the standard library. Read-only: folders are opened with EXAMINE and bodies fetched with BODY.PEEK.
 
 imaplib is blocking, so every operation runs in a worker thread with its own short-lived connection. imaplib does not quote
-mailbox names or search strings, so this module does. Nothing from a tool argument reaches the wire without validation.
+folder names or search strings, so this module does. Nothing from a tool argument reaches the wire without validation.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def imap_date(text: str) -> str:
 
 
 @dataclass(frozen=True)
-class Mailbox:
+class Folder:
     name: str  # as the user sees it (decoded)
     wire: str  # as the server knows it (modified UTF-7)
     attrs: tuple[str, ...]
@@ -143,7 +143,7 @@ class ImapBackend:
                 self._log.warning("mail operation failed: %s", type(e).__name__)
                 raise
 
-    # ----------------------------------------------------------- mailboxes
+    # ----------------------------------------------------------- folders
     @staticmethod
     def _visible(s: Settings, name: str) -> bool:
         if name.upper() == "INBOX":
@@ -154,9 +154,9 @@ class ImapBackend:
 
     _LIST_LINE = re.compile(r'\((?P<attrs>[^)]*)\)\s+(?P<delim>"(?:[^"\\]|\\.)*"|NIL)\s+(?P<name>.+)$', re.I)
 
-    def _scan(self, conn) -> tuple[list[Mailbox], int, int]:
-        """Ask the server for every mailbox. Returns (selectable mailboxes, lines received, lines not understood)."""
-        found: dict[str, Mailbox] = {}
+    def _scan(self, conn) -> tuple[list[Folder], int, int]:
+        """Ask the server for every folder. Returns (selectable folders, lines received, lines not understood)."""
+        found: dict[str, Folder] = {}
         received = unparsed = 0
         for pattern in ("*", "%"):  # some servers answer only one of the two
             typ, data = conn.list('""', pattern)
@@ -182,7 +182,7 @@ class ImapBackend:
                 attrs = tuple(a for a in m.group("attrs").split() if a)
                 if "\\noselect" in {a.casefold() for a in attrs}:
                     continue
-                found.setdefault(raw, Mailbox(utf7.decode(raw), raw, attrs))
+                found.setdefault(raw, Folder(utf7.decode(raw), raw, attrs))
             if found:
                 break
         if not any(b.name.upper() == "INBOX" for b in found.values()):
@@ -192,13 +192,13 @@ class ImapBackend:
             except (imaplib.IMAP4.error, OSError):
                 typ = "NO"
             if typ == "OK":
-                found["INBOX"] = Mailbox("INBOX", "INBOX", ())
+                found["INBOX"] = Folder("INBOX", "INBOX", ())
         return list(found.values()), received, unparsed
 
-    def _list(self, conn, s: Settings) -> list[Mailbox]:
+    def _list(self, conn, s: Settings) -> list[Folder]:
         return [b for b in self._scan(conn)[0] if self._visible(s, b.name)]
 
-    async def list_mailboxes(self) -> list[Mailbox]:
+    async def list_folders(self) -> list[Folder]:
         return await self._run(self._list)
 
     async def mailbox_report(self) -> dict[str, int]:
@@ -212,23 +212,23 @@ class ImapBackend:
         return await self._run(work)
 
     @staticmethod
-    def _resolve(boxes: list[Mailbox], wanted: str) -> Mailbox:
+    def _resolve(boxes: list[Folder], wanted: str) -> Folder:
         wanted = wanted.strip() or "INBOX"
         if len(wanted) > 200 or _BAD.search(wanted):
-            raise MailError("No such mailbox.")
+            raise MailError("No such folder.")
         for b in boxes:
             if b.name == wanted:
                 return b
         for b in boxes:  # case-insensitive fallback, only when it is unambiguous
             if b.name.casefold() == wanted.casefold():
                 return b
-        raise MailError("No such mailbox.")
+        raise MailError("No such folder.")
 
-    def _open(self, conn, s: Settings, mailbox: str) -> tuple[Mailbox, int]:
-        box = self._resolve(self._list(conn, s), mailbox)
+    def _open(self, conn, s: Settings, folder: str) -> tuple[Folder, int]:
+        box = self._resolve(self._list(conn, s), folder)
         typ, _ = conn.select(quote(box.wire), readonly=True)  # EXAMINE
         if typ != "OK":
-            raise MailError("No such mailbox.")
+            raise MailError("No such folder.")
         validity = 0
         try:
             validity = int((conn.response("UIDVALIDITY")[1] or [b"0"])[0])
@@ -277,9 +277,9 @@ class ImapBackend:
             out[uid] = Summary(uid, h.get("Date", ""), h.get("From", ""), h.get("To", ""), h.get("Subject", ""), size, unread)
         return [out[u] for u in uids if u in out]
 
-    async def search(self, mailbox: str, *, unread_only: bool = False, from_address: str = "", to_address: str = "", subject: str = "",
+    async def search(self, folder: str, *, unread_only: bool = False, from_address: str = "", to_address: str = "", subject: str = "",
                      text: str = "", since: str = "", before: str = "", limit: int = 20) -> tuple[str, int, list[Summary], int]:
-        """Return (mailbox name, matches, newest-first summaries, uidvalidity)."""
+        """Return (folder name, matches, newest-first summaries, uidvalidity)."""
         limit = max(1, min(int(limit), MAX_LIMIT))
         crit: list[str] = []
         for key, value in (("FROM", from_address), ("TO", to_address), ("SUBJECT", subject), ("TEXT", text)):
@@ -298,7 +298,7 @@ class ImapBackend:
             crit = ["ALL"]
 
         def work(conn, s: Settings):
-            box, validity = self._open(conn, s, mailbox)
+            box, validity = self._open(conn, s, folder)
             typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *[c.encode("utf-8") for c in crit])
             if typ != "OK":
                 raise MailError("The mail server would not run that search.")
@@ -307,13 +307,13 @@ class ImapBackend:
 
         return await self._run(work)
 
-    async def fetch(self, mailbox: str, uid: int) -> tuple[str, int, int, bool, bytes, bool]:
-        """Return (mailbox name, uidvalidity, size, unread, raw bytes, truncated)."""
+    async def fetch(self, folder: str, uid: int) -> tuple[str, int, int, bool, bytes, bool]:
+        """Return (folder name, uidvalidity, size, unread, raw bytes, truncated)."""
         if not isinstance(uid, int) or isinstance(uid, bool) or not 1 <= uid <= 4_294_967_295:
             raise MailError("uid must be a number from the message id, such as the 1234 in INBOX:1234.")
 
         def work(conn, s: Settings):
-            box, validity = self._open(conn, s, mailbox)
+            box, validity = self._open(conn, s, folder)
             typ, data = conn.uid("FETCH", str(uid), f"(UID FLAGS RFC822.SIZE BODY.PEEK[]<0.{s.max_fetch_bytes}>)")
             if typ != "OK":
                 raise MailError("The mail server would not return that message.")

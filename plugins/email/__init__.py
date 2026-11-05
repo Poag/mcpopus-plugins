@@ -1,4 +1,4 @@
-"""email: read-only mailbox access over any IMAP server (Gmail, AgentMail, Fastmail and others). Design: docs/email.md."""
+"""email: read-only mail access over any IMAP server (Gmail, AgentMail, Fastmail and others). Design: docs/email.md."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ class Config(BaseModel):
     username: str = Field(description="The IMAP login name, usually the full mailbox address")
     password: SecretStr = Field(description="The IMAP password. Gmail and several other providers need an app password rather than the account password")
     ca_certificate: str = Field("", max_length=20_000, description="Extra certificate authority in PEM form, for a private mail server. Leave empty for public providers")
-    readable_mailboxes: list[str] = Field([], description="Only these mailboxes (and those below them) are visible, one per line. Empty means all except the blocked ones")
-    blocked_mailboxes: list[str] = Field(["Spam", "Junk", "Trash", "Deleted Items", "[Gmail]/Spam", "[Gmail]/Trash"], description="Never visible (nor anything below them), whatever else is set, one per line. Replacing this list removes the defaults")
+    readable_folders: list[str] = Field([], description="Only these folders (and those below them) are visible, one per line. Empty means all except the blocked ones")
+    blocked_folders: list[str] = Field(["Spam", "Junk", "Trash", "Deleted Items", "[Gmail]/Spam", "[Gmail]/Trash"], description="Never visible (nor anything below them), whatever else is set, one per line. Replacing this list removes the defaults")
     max_body_chars: int = Field(20_000, ge=1_000, le=200_000, description="Most characters of message text returned by read_message")
     max_fetch_bytes: int = Field(2_000_000, ge=10_000, le=25_000_000, description="Most bytes downloaded for one message; a larger message is read from its start")
     timeout_seconds: int = Field(20, ge=3, le=120, description="Seconds to wait for the mail server")
@@ -52,7 +52,7 @@ class Config(BaseModel):
             raise ValueError("must not be empty or contain control characters")
         return v
 
-    @field_validator("readable_mailboxes", "blocked_mailboxes", mode="before")
+    @field_validator("readable_folders", "blocked_folders", mode="before")
     @classmethod
     def _lines(cls, v):
         if isinstance(v, list):
@@ -83,7 +83,7 @@ class Email(Plugin):
         c = self.ctx.config
         password = app_password(c.imap_host, c.password.get_secret_value())  # read at the moment of use
         return Settings(c.imap_host, c.imap_port, c.username, password, c.ca_certificate, float(c.timeout_seconds),
-                        tuple(c.readable_mailboxes), tuple(c.blocked_mailboxes), c.max_fetch_bytes)
+                        tuple(c.readable_folders), tuple(c.blocked_folders), c.max_fetch_bytes)
 
     @staticmethod
     async def _guard(coro):
@@ -97,51 +97,51 @@ class Email(Plugin):
         """Check that the mail account can be reached and signed in to. Returns counts only, no message content."""
         r = await self._guard(self.backend.mailbox_report())
         c = self.ctx.config
-        text = (f"Signed in to {c.imap_host} as {c.username}. The server listed {r['received']} mailbox entries; {r['usable']} can be opened, "
-                f"{r['visible']} are visible to this connector, {r['hidden']} are hidden by the readable_mailboxes and blocked_mailboxes settings, "
+        text = (f"Signed in to {c.imap_host} as {c.username}. The server listed {r['received']} folder entries; {r['usable']} can be opened, "
+                f"{r['visible']} are visible to this connector, {r['hidden']} are hidden by the readable_folders and blocked_folders settings, "
                 f"{r['unparsed']} were not understood. The connector can only read: nothing is marked read, moved or deleted.")
         if r["visible"] == 0:
             if r["hidden"]:
-                text += " Nothing is visible because of the readable_mailboxes or blocked_mailboxes settings: check them (INBOX must be allowed)."
+                text += " Nothing is visible because of the readable_folders or blocked_folders settings: check them (INBOX must be allowed)."
             elif r["unparsed"]:
-                text += " The server's mailbox list is in a form this plugin does not understand: report this."
+                text += " The server's folder list is in a form this plugin does not understand: report this."
             else:
-                text += " The server reported no mailboxes and INBOX could not be opened: check that the account has a mailbox and that this host and port are its IMAP service."
+                text += " The server reported no folders and INBOX could not be opened: check that the account has a mailbox and that this host and port are its IMAP service."
         return text
 
     @tool(tier="read")
-    async def list_mailboxes(self) -> str:
-        """List the visible mailboxes (folders; in Gmail every label is a mailbox). Special-use mailboxes are marked, for example \\Sent or \\All."""
-        boxes = await self._guard(self.backend.list_mailboxes())
+    async def list_folders(self) -> str:
+        """List the visible folders (in Gmail every label is a folder). Special-use folders are marked, for example \\Sent or \\All."""
+        boxes = await self._guard(self.backend.list_folders())
         lines = []
         for b in boxes:
             special = [a for a in b.attrs if a.startswith("\\") and not a.startswith("\\Has")]
             lines.append(f"- {b.name}" + (f" ({' '.join(special)})" if special else ""))
-        return "\n".join(lines) or "No mailboxes are visible."
+        return "\n".join(lines) or "No folders are visible."
 
     @tool(tier="read", untrusted=True)
-    async def list_messages(self, mailbox: str = "INBOX", unread_only: bool = False, limit: int = 20) -> str:
-        """List the newest messages in a mailbox: id (mailbox:uid), date, sender, subject, size. Reading does not mark anything as read."""
-        return await self._search(mailbox, unread_only=unread_only, limit=limit)
+    async def list_messages(self, folder: str = "INBOX", unread_only: bool = False, limit: int = 20) -> str:
+        """List the newest messages in a folder: id (folder:uid), date, sender, subject, size. Reading does not mark anything as read."""
+        return await self._search(folder, unread_only=unread_only, limit=limit)
 
     @tool(tier="read", untrusted=True)
-    async def search_messages(self, mailbox: str = "INBOX", from_address: str = "", to_address: str = "", subject: str = "", text: str = "",
+    async def search_messages(self, folder: str = "INBOX", from_address: str = "", to_address: str = "", subject: str = "", text: str = "",
                               since: str = "", before: str = "", unread_only: bool = False, limit: int = 20) -> str:
-        """Search one mailbox. All given criteria must match. Dates look like 2026-11-04. text searches the whole message."""
-        return await self._search(mailbox, from_address=from_address, to_address=to_address, subject=subject, text=text, since=since,
+        """Search one folder. All given criteria must match. Dates look like 2026-11-04. text searches the whole message."""
+        return await self._search(folder, from_address=from_address, to_address=to_address, subject=subject, text=text, since=since,
                                   before=before, unread_only=unread_only, limit=limit)
 
-    async def _search(self, mailbox: str, **kw) -> str:
-        name, total, found, validity = await self._guard(self.backend.search(mailbox, **kw))
+    async def _search(self, folder: str, **kw) -> str:
+        name, total, found, validity = await self._guard(self.backend.search(folder, **kw))
         head = f"{total} messages match in {name} (showing {len(found)}, newest first; at most {MAX_LIMIT} per call). UIDVALIDITY {validity}."
         return "\n".join([head, *(_line(name, m) for m in found)])
 
     @tool(tier="read", untrusted=True)
-    async def read_message(self, uid: int, mailbox: str = "INBOX", max_chars: int = 0) -> str:
-        """Read one message by mailbox and uid (the id shown as INBOX:1234 is mailbox INBOX, uid 1234). Returns headers, text and an attachment list. Does not mark it as read."""
+    async def read_message(self, uid: int, folder: str = "INBOX", max_chars: int = 0) -> str:
+        """Read one message by folder and uid (the id shown as INBOX:1234 is folder INBOX, uid 1234). Returns headers, text and an attachment list. Does not mark it as read."""
         cfg = self.ctx.config
         limit = cfg.max_body_chars if max_chars <= 0 else min(max_chars, cfg.max_body_chars)
-        name, validity, size, unread, raw, cut = await self._guard(self.backend.fetch(mailbox, uid))
+        name, validity, size, unread, raw, cut = await self._guard(self.backend.fetch(folder, uid))
         p = parse_message(raw, limit, cut)
         h = p.headers
         lines = [f"id: {name}:{uid}", f"uidvalidity: {validity}", f"size: {_size(size)}", f"unread: {'yes' if unread else 'no'}"]

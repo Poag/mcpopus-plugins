@@ -62,7 +62,7 @@ async def call(client, tool, args=None):
 async def test_only_read_tools_exist_and_all_content_is_untrusted(imap, tmp_path):
     async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, lp, _):
         names = sorted(t.name for t in (await c.list_tools()).tools)
-        assert names == ["list_mailboxes", "list_messages", "mailbox_status", "read_message", "search_messages"]
+        assert names == ["list_folders", "list_messages", "mailbox_status", "read_message", "search_messages"]
         assert {m.tier for m in lp.declared if m.kind == "tool"} == {"read"}
         untrusted = {m.name for m in lp.declared if m.kind == "tool" and m.untrusted}
         assert untrusted == {"list_messages", "search_messages", "read_message"}
@@ -72,7 +72,7 @@ async def test_status_and_mailboxes_hide_blocked_ones(imap, tmp_path):
     async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, _, _):
         err, text = await call(c, "mailbox_status")
         assert not err and "Signed in to 127.0.0.1" in text and "5 are visible" in text and "2 are hidden" in text and "0 were not understood" in text
-        err, text = await call(c, "list_mailboxes")
+        err, text = await call(c, "list_folders")
         assert "- INBOX" in text and "[Gmail]/All Mail (\\All)" in text and "[Gmail]/Sent Mail (\\Sent)" in text
         assert "Spam" not in text and "Trash" not in text and "Projects/über" in text
 
@@ -85,22 +85,22 @@ async def test_servers_that_list_mailboxes_differently_still_work(imap, tmp_path
         assert "INBOX" not in text and "5 are visible" in text or style == "no_inbox"
         _, text = await call(c, "list_messages")
         assert "INBOX:4 " in text
-        _, text = await call(c, "list_mailboxes")
+        _, text = await call(c, "list_folders")
         assert "- INBOX" in text
 
 
 async def test_status_explains_why_nothing_is_visible(imap, tmp_path):
     imap.list_style = "empty"
     imap.boxes = {"INBOX": imap.boxes["INBOX"]}
-    async with running_plugin(tmp_path / "a", "email", values(imap, blocked_mailboxes=["INBOX"]), SECRETS) as (c, _, _):
+    async with running_plugin(tmp_path / "a", "email", values(imap, blocked_folders=["INBOX"]), SECRETS) as (c, _, _):
         _, text = await call(c, "mailbox_status")
-        assert "0 are visible" in text and "readable_mailboxes or blocked_mailboxes settings" in text
+        assert "0 are visible" in text and "readable_folders or blocked_folders settings" in text
         err, text = await call(c, "list_messages")
-        assert err and "No such mailbox" in text
+        assert err and "No such folder" in text
     imap.boxes.clear()
     async with running_plugin(tmp_path / "b", "email", values(imap), SECRETS) as (c, _, _):
         _, text = await call(c, "mailbox_status")
-        assert "0 are visible" in text and "no mailboxes and INBOX could not be opened" in text
+        assert "0 are visible" in text and "no folders and INBOX could not be opened" in text
 
 
 async def test_list_messages_newest_first_with_unread_markers(imap, tmp_path):
@@ -122,7 +122,7 @@ async def test_search_criteria(imap, tmp_path):
         assert "1 messages match" in text and "INBOX:2 " in text
         _, text = await call(c, "search_messages", {"subject": "invoice"})
         assert "INBOX:1 " in text and "INBOX:2 " not in text
-        _, text = await call(c, "search_messages", {"text": "needle", "mailbox": "[Gmail]/All Mail"})
+        _, text = await call(c, "search_messages", {"text": "needle", "folder": "[Gmail]/All Mail"})
         assert "[Gmail]/All Mail:10 " in text
         _, text = await call(c, "search_messages", {"since": "2026-11-03", "before": "2026-11-04"})
         assert "1 messages match" in text and "INBOX:2 " in text
@@ -162,20 +162,20 @@ async def test_reading_never_changes_the_mailbox(imap, tmp_path):
 
 async def test_blocked_and_unlisted_mailboxes_look_like_missing_ones(imap, tmp_path):
     async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, _, _):
-        _, missing = await call(c, "list_messages", {"mailbox": "Nope"})
-        err, blocked = await call(c, "list_messages", {"mailbox": "[Gmail]/Spam"})
-        assert err and blocked == missing and "No such mailbox" in blocked
-        err, text = await call(c, "read_message", {"uid": 20, "mailbox": "[gmail]/trash"})
-        assert err and "No such mailbox" in text
-    async with running_plugin(tmp_path / "b", "email", values(imap, readable_mailboxes=["INBOX", "Projects"]), SECRETS) as (c, _, _):
-        _, text = await call(c, "list_mailboxes")
+        _, missing = await call(c, "list_messages", {"folder": "Nope"})
+        err, blocked = await call(c, "list_messages", {"folder": "[Gmail]/Spam"})
+        assert err and blocked == missing and "No such folder" in blocked
+        err, text = await call(c, "read_message", {"uid": 20, "folder": "[gmail]/trash"})
+        assert err and "No such folder" in text
+    async with running_plugin(tmp_path / "b", "email", values(imap, readable_folders=["INBOX", "Projects"]), SECRETS) as (c, _, _):
+        _, text = await call(c, "list_folders")
         assert "Private" not in text and "All Mail" not in text and "Projects/über" in text
-        err, _ = await call(c, "list_messages", {"mailbox": "Private"})
+        err, _ = await call(c, "list_messages", {"folder": "Private"})
         assert err
-        _, text = await call(c, "list_messages", {"mailbox": "Projects/über"})
+        _, text = await call(c, "list_messages", {"folder": "Projects/über"})
         assert "Label message" in text  # a non-ASCII name round-trips through modified UTF-7
-    async with running_plugin(tmp_path / "c", "email", values(imap, blocked_mailboxes=["Projects"]), SECRETS) as (c, _, _):
-        _, text = await call(c, "list_mailboxes")
+    async with running_plugin(tmp_path / "c", "email", values(imap, blocked_folders=["Projects"]), SECRETS) as (c, _, _):
+        _, text = await call(c, "list_folders")
         assert "Projects" not in text and "Spam" in text  # an explicit setting replaces the default list
 
 
@@ -192,8 +192,8 @@ async def test_bad_arguments_are_refused_without_echoing_them(imap, tmp_path):
         assert err and "too long" in text
         for evil in ('x"\r\nA1 DELETE INBOX', "a\x00b", 'INBOX" ALL'):
             await call(c, "search_messages", {"subject": evil})  # sent as one quoted string; the command log is checked below
-            err, text = await call(c, "list_messages", {"mailbox": evil})
-            assert err and "No such mailbox" in text
+            err, text = await call(c, "list_messages", {"folder": evil})
+            assert err and "No such folder" in text
         err, text = await call(c, "list_messages", {"limit": 10_000})
         assert not err and "at most 50" in text
         err, text = await call(c, "list_messages", {"limit": -3})
@@ -225,7 +225,7 @@ async def test_hostile_messages_do_not_crash_or_blow_up(imap, tmp_path):
 async def test_secret_never_appears_in_results_logs_or_audit(imap, tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
     async with running_plugin(tmp_path, "email", values(imap), SECRETS) as (c, _, _):
-        outputs = [await call(c, "mailbox_status"), await call(c, "list_mailboxes"), await call(c, "list_messages"), await call(c, "read_message", {"uid": 1})]
+        outputs = [await call(c, "mailbox_status"), await call(c, "list_folders"), await call(c, "list_messages"), await call(c, "read_message", {"uid": 1})]
         assert not any(err for err, _ in outputs)
         blob = "\n".join(t for _, t in outputs)
     async with running_plugin(tmp_path / "b", "email", values(imap), {"password": "wrong-password-xyz"}) as (c, _, _):

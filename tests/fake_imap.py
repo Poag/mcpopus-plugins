@@ -162,7 +162,7 @@ class FakeImap:
                 elif up == "EXAMINE":
                     name = tokens(args)[0]
                     if name not in self.boxes:
-                        send(f"{tag} NO [NONEXISTENT] Unknown Mailbox\r\n")
+                        send(f"{tag} NO [NONEXISTENT] Unknown Folder\r\n")
                     else:
                         state["box"] = name
                         send(f"* {len(self.boxes[name]['msgs'])} EXISTS\r\n", "* OK [UIDVALIDITY 777] ok\r\n", f"{tag} OK [READ-ONLY] examined\r\n")
@@ -208,7 +208,7 @@ class FakeImap:
         sub, _, rest = args.partition(" ")
         box = self.boxes.get(state["box"] or "")
         if box is None:
-            send(f"{tag} BAD no mailbox selected\r\n")
+            send(f"{tag} BAD no folder selected\r\n")
             return
         if sub.upper() == "SEARCH":
             t = tokens(rest)

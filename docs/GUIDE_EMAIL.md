@@ -13,8 +13,8 @@ Plain-text IMAP (port 143) and OAuth-only providers are not supported.
 
 | Provider | Host | Notes |
 | --- | --- | --- |
-| Gmail | `imap.gmail.com` | App password; IMAP must be enabled in Gmail settings. Labels appear as mailboxes; archived mail is in `[Gmail]/All Mail` |
-| AgentMail | `imap.agentmail.to` | Login is the inbox address. See the troubleshooting table if no mailboxes appear |
+| Gmail | `imap.gmail.com` | App password; IMAP must be enabled in Gmail settings. Labels appear as folders; archived mail is in `[Gmail]/All Mail` |
+| AgentMail | `imap.agentmail.to` | Login is the inbox address. See the troubleshooting table if no folders appear |
 | Others | the provider's IMAP host | Check its help pages for the host and whether an app password is needed |
 
 These rows are starting points to check against the provider's own help, not guarantees.
@@ -30,8 +30,8 @@ These rows are starting points to check against the provider's own help, not gua
 | `imap_port` | `993` unless the provider says otherwise |
 | `username` | The login name |
 | `password` | The password or app password |
-| `readable_mailboxes` | Leave empty for everything except blocked, or list the folders Claude may see (one per line) |
-| `blocked_mailboxes` | Defaults hide `Spam`, `Junk`, `Trash`, `Deleted Items`, `[Gmail]/Spam` and `[Gmail]/Trash` (and anything below them). Replacing the list removes the defaults |
+| `readable_folders` | Leave empty for everything except blocked, or list the folders Claude may see (one per line) |
+| `blocked_folders` | Defaults hide `Spam`, `Junk`, `Trash`, `Deleted Items`, `[Gmail]/Spam` and `[Gmail]/Trash` (and anything below them). Replacing the list removes the defaults |
 | `ca_certificate`, `max_body_chars`, `max_fetch_bytes`, `timeout_seconds` | Normally leave alone |
 
 3. **Save and reload**. Under **Policy** all five tools are read tools and are ticked by default.
@@ -48,11 +48,11 @@ plugin must not change it.
 
 | Tool | Use |
 | --- | --- |
-| `mailbox_status` | Checks sign-in and reports counts of mailboxes found, visible and hidden. No content |
-| `list_mailboxes` | Visible mailboxes, with special-use marks such as `\Sent` |
-| `list_messages` | Newest messages in a mailbox, optionally unread only |
+| `mailbox_status` | Checks sign-in and reports counts of folders found, visible and hidden. No content |
+| `list_folders` | Visible folders, with special-use marks such as `\Sent` |
+| `list_messages` | Newest messages in a folder, optionally unread only |
 | `search_messages` | From, to, subject, text, date range, unread. Criteria combine with AND |
-| `read_message` | One message by `INBOX:1234` (mailbox and uid): headers, text, attachment list |
+| `read_message` | One message by `INBOX:1234` (folder and uid): headers, text, attachment list |
 
 Attachments are listed but never downloaded.
 
@@ -65,7 +65,7 @@ Attachments are listed but never downloaded.
 | "Cannot find the mail server" | `imap_host` is misspelt, or the host has no DNS |
 | "Cannot reach the mail server" | Wrong `imap_port`, or outbound connections on that port are blocked from the host |
 | "certificate was not accepted" | `imap_host` is not the server's name, or a private server needs `ca_certificate` |
-| `mailbox_status` says 0 visible | Read the counts it gives: "hidden by settings" means check `readable_mailboxes` and `blocked_mailboxes`; "not understood" means the provider's mailbox list has an unusual form, so report it; all zero means the server lists nothing and INBOX will not open, so check that host and port are the provider's IMAP service and that the account has a mailbox |
-| "No such mailbox" | The folder does not exist, is blocked, or is outside `readable_mailboxes`. These look the same by design |
+| `mailbox_status` says 0 visible | Read the counts it gives: "hidden by settings" means check `readable_folders` and `blocked_folders`; "not understood" means the provider's folder list has an unusual form, so report it; all zero means the server lists nothing and INBOX will not open, so check that host and port are the provider's IMAP service and that the account has a mailbox |
+| "No such folder" | The folder does not exist, is blocked, or is outside `readable_folders`. These look the same by design |
 | Search with accented text finds nothing | See open question 2 in [email.md](email.md) |
-| Messages missing from `INBOX` | They may be archived or filed elsewhere: use `list_mailboxes`, then search the right folder |
+| Messages missing from `INBOX` | They may be archived or filed elsewhere: use `list_folders`, then search the right folder |
