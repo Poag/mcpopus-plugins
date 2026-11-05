@@ -94,8 +94,16 @@ OAuth, push notifications, and more than one mailbox account per plugin.
 ## 8. Open questions
 
 1. Whether a given provider still allows IMAP password login (Gmail: app password; unverified). Gmail itself has not been tried. The owner's first real run used AgentMail (`imap.agentmail.to`), where sign-in succeeded.
-2. Non-ASCII search text is sent as a quoted UTF-8 string after `CHARSET UTF-8`. Real servers' behaviour with that is unverified; the fake
+2. Non-ASCII search text is sent as a quoted UTF-8 string after `CHARSET UTF-8`. Verified on 5 November 2026 against AgentMail (a search for "Zürich" found the message); other servers, Gmail included, are unverified; the fake
    server accepts it. If Gmail rejects it, switch to an IMAP literal.
 3. Whether Gmail's IMAP shows a message's labels cheaply (`X-GM-LABELS`) is worth adding for filtering. Not built.
 4. Which folder is the default. Left as `INBOX`.
 5. Why AgentMail's IMAP service reported no folders on 4 November 2026 with 0.1.0. Possibly settings, an unusual `LIST` reply, or a service that exposes mail differently. 0.1.1 reports the counts; the owner's next `mailbox_status` result decides.
+
+## 9. Verified against a real server
+
+5 November 2026, plugin 0.1.1 on AgentMail (`imap.agentmail.to`), through a claude.ai connector, by the 13-step test prompt: sign-in, folder listing
+(6 entries, 4 visible after the default blocks), unread listing, search by subject, text, accented text and date range, reading plain and
+attachment messages, an injection message returned as quoted data and not followed, messages still unread afterwards, missing folder and
+bad uid errors. The only failed step was a test-prompt expectation of `[Gmail]/All Mail`, which does not exist on a non-Gmail account.
+Not yet verified: Gmail itself, 0.2.0 on a real server, a message over `max_fetch_bytes`, STARTTLS (not built).
