@@ -1,0 +1,260 @@
+"""Home Assistant access: REST for states, history, logbook and services; WebSocket for the area, device and entity registries.
+
+Why two transports (design doc, section 2): the REST API has no registry endpoints, and the only REST way to learn an entity's area
+is the template endpoint, which this plugin never uses. The registry lists are read-only WebSocket commands. Nothing here sends a
+write; the one POST route Home Assistant offers for service calls arrives with the write tools in a later phase.
+
+Messages raised as HAError are safe to show the model: they name a setting, never the URL, the token or anything Home Assistant said.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ssl
+import time
+from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import quote, urlsplit
+
+import httpx2
+
+STATES_TTL = 3.0
+REGISTRY_TTL = 60.0
+REGISTRY_RETRY = 20.0
+AUTH_PAUSE = 60.0
+
+
+class HAError(Exception):
+    """A failure whose message is safe to show."""
+
+
+class RegistryUnavailable(HAError):
+    """Area and device data could not be read (the rest of the plugin still works)."""
+
+
+@dataclass(frozen=True)
+class Settings:
+    base_url: str
+    token: str
+    timeout: float
+    max_response_bytes: int
+
+
+@dataclass
+class Registry:
+    areas: dict[str, str] = field(default_factory=dict)  # area id -> name
+    entity_area: dict[str, str] = field(default_factory=dict)  # entity id -> area id (the entity's own, else its device's)
+
+    def area_name(self, entity_id: str) -> str:
+        return self.areas.get(self.entity_area.get(entity_id, ""), "")
+
+
+def ssl_context(verify: bool, ca_pem: str) -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    if ca_pem:
+        ctx.load_verify_locations(cadata=ca_pem)
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def check_base_url(url: str) -> str:
+    """Validate the configured base URL; raises ValueError with a message that does not echo it."""
+    u = url.strip()
+    parts = urlsplit(u)
+    if parts.scheme not in ("http", "https") or not parts.hostname or "://" not in u:
+        raise ValueError("must start with http:// or https:// and name the host, for example http://homeassistant.local:8123")
+    if parts.username or parts.password or parts.query or parts.fragment or any(c.isspace() for c in u):
+        raise ValueError("must not contain credentials, spaces, a query or a fragment")
+    return u.rstrip("/")
+
+
+def _cause_is_tls(exc: BaseException) -> bool:
+    seen = 0
+    while exc is not None and seen < 6:
+        if isinstance(exc, ssl.SSLError):
+            return True
+        exc = exc.__cause__ or exc.__context__  # type: ignore[assignment]
+        seen += 1
+    return False
+
+
+class HomeAssistant:
+    def __init__(self, http: httpx2.AsyncClient, get_settings, logger) -> None:
+        self._http = http
+        self._get = get_settings  # called per operation, so the token is read at the moment of use
+        self._log = logger
+        self._blocked_until = 0.0
+        self._states: tuple[float, list[dict[str, Any]]] | None = None
+        self._registry: tuple[float, Registry] | None = None
+        self._registry_failed: tuple[float, RegistryUnavailable] | None = None
+        self._reg_lock = asyncio.Lock()
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    # ------------------------------------------------------------------ REST
+    def _blocked(self) -> None:
+        if time.monotonic() < self._blocked_until:
+            raise HAError("Home Assistant refused the access token a moment ago. Check the token setting (it may have been revoked or mistyped). "
+                          f"Calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
+
+    def _refused(self) -> HAError:
+        self._blocked_until = time.monotonic() + AUTH_PAUSE
+        return HAError("Home Assistant refused the access token. Check the token setting (it may have been revoked or mistyped).")
+
+    async def _get_json(self, path: str, params: dict[str, str] | None = None, *, missing_ok: bool = False) -> Any:
+        self._blocked()
+        s: Settings = self._get()
+        try:
+            async with self._http.stream("GET", s.base_url + path, params=params, headers={"Authorization": f"Bearer {s.token}", "Accept": "application/json"}) as r:
+                status = r.status_code
+                if status in (401, 403):
+                    raise self._refused() if status == 401 else HAError("Home Assistant refused permission for this request. The token's user may not be allowed to read it.")
+                if status == 404 and missing_ok:
+                    return None
+                if status in (301, 302, 303, 307, 308):
+                    raise HAError("Home Assistant redirected the request. Check the base_url setting (for example http versus https, or a missing port).")
+                if status == 404:
+                    raise HAError("Home Assistant does not have that endpoint. Check the base_url setting and that the api (or frontend) integration is enabled.")
+                if status >= 400:
+                    raise HAError(f"Home Assistant rejected the request (status {status}).")
+                body = bytearray()
+                async for chunk in r.aiter_bytes():
+                    body += chunk
+                    if len(body) > s.max_response_bytes:
+                        raise HAError("Home Assistant's reply is larger than the max_response_bytes setting allows. Raise it, or narrow the request.")
+        except HAError:
+            raise
+        except httpx2.TimeoutException:
+            raise HAError("Home Assistant did not answer in time. Check the base_url and timeout_seconds settings.") from None
+        except httpx2.UnsupportedProtocol:
+            raise HAError("The base_url setting is not usable: it must start with http:// or https://.") from None
+        except httpx2.ConnectError as e:
+            if _cause_is_tls(e):
+                raise HAError("Home Assistant's certificate was not accepted. Check base_url, or set ca_certificate for a private certificate authority.") from None
+            raise HAError("Cannot connect to Home Assistant. Check the base_url setting and that Home Assistant is running and reachable from this host.") from None
+        except httpx2.HTTPError as e:
+            self._log.warning("home assistant request failed: %s", type(e).__name__)
+            raise HAError("Cannot reach Home Assistant (the connection failed). Check the base_url setting.") from None
+        try:
+            import json
+
+            return json.loads(bytes(body))
+        except ValueError:
+            raise HAError("Home Assistant returned something that is not JSON. Check that base_url points at Home Assistant, not a login or proxy page.") from None
+
+    async def info(self) -> dict[str, Any]:
+        data = await self._get_json("/api/config")
+        return data if isinstance(data, dict) else {}
+
+    async def states(self, *, fresh: bool = False) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        if not fresh and self._states and now - self._states[0] < STATES_TTL:
+            return self._states[1]
+        data = await self._get_json("/api/states")
+        if not isinstance(data, list):
+            raise HAError("Home Assistant returned an unexpected states reply.")
+        states = [d for d in data if isinstance(d, dict) and isinstance(d.get("entity_id"), str)]
+        self._states = (now, states)
+        return states
+
+    async def history(self, entity_id: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        data = await self._get_json(f"/api/history/period/{quote(start_iso, safe='')}", {
+            "filter_entity_id": entity_id, "end_time": end_iso, "minimal_response": "", "no_attributes": ""})
+        if not isinstance(data, list):
+            raise HAError("Home Assistant returned an unexpected history reply.")
+        rows: list[dict[str, Any]] = []
+        for series in data[:1]:  # one entity was asked for
+            if isinstance(series, list):
+                rows += [r for r in series if isinstance(r, dict)]
+        return rows
+
+    async def logbook(self, entity_id: str, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        data = await self._get_json(f"/api/logbook/{quote(start_iso, safe='')}", {"entity": entity_id, "end_time": end_iso})
+        if not isinstance(data, list):
+            raise HAError("Home Assistant returned an unexpected logbook reply.")
+        return [d for d in data if isinstance(d, dict)]
+
+    async def services(self) -> dict[str, dict[str, Any]]:
+        """domain -> service -> description. Tolerates both documented shapes (a list of names, or a mapping)."""
+        data = await self._get_json("/api/services")
+        out: dict[str, dict[str, Any]] = {}
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("domain"), str):
+                continue
+            svc = item.get("services")
+            if isinstance(svc, dict):
+                out[item["domain"]] = {k: (v if isinstance(v, dict) else {}) for k, v in svc.items() if isinstance(k, str)}
+            elif isinstance(svc, list):
+                out[item["domain"]] = {k: {} for k in svc if isinstance(k, str)}
+        return out
+
+    # ------------------------------------------------------------- registry
+    async def registry(self) -> Registry:
+        now = time.monotonic()
+        if self._registry and now - self._registry[0] < REGISTRY_TTL:
+            return self._registry[1]
+        async with self._reg_lock:
+            if self._registry and time.monotonic() - self._registry[0] < REGISTRY_TTL:
+                return self._registry[1]
+            if self._registry_failed and time.monotonic() - self._registry_failed[0] < REGISTRY_RETRY:
+                raise self._registry_failed[1]  # do not retry a failing WebSocket on every call
+            try:
+                reg = await self._fetch_registry()
+            except RegistryUnavailable as e:
+                self._registry_failed = (time.monotonic(), e)
+                raise
+            self._registry = (time.monotonic(), reg)
+            self._registry_failed = None
+            return reg
+
+    async def _fetch_registry(self) -> Registry:
+        self._blocked()
+        s: Settings = self._get()
+        ws_url = ("wss://" if s.base_url.startswith("https://") else "ws://") + s.base_url.split("://", 1)[1] + "/api/websocket"
+        commands = {1: "config/area_registry/list", 2: "config/device_registry/list", 3: "config/entity_registry/list"}
+        results: dict[int, Any] = {}
+        try:
+            async with asyncio.timeout(s.timeout * 3):
+                async with self._http.websocket(ws_url, max_message_size_bytes=s.max_response_bytes, keepalive_ping_interval_seconds=None) as ws:
+                    hello = await ws.receive_json(timeout=s.timeout)
+                    if not isinstance(hello, dict) or hello.get("type") != "auth_required":
+                        raise RegistryUnavailable("Home Assistant's WebSocket did not start as expected. Check the base_url setting.")
+                    await ws.send_json({"type": "auth", "access_token": s.token})
+                    reply = await ws.receive_json(timeout=s.timeout)
+                    if not isinstance(reply, dict) or reply.get("type") == "auth_invalid":
+                        raise self._refused()
+                    if reply.get("type") != "auth_ok":
+                        raise RegistryUnavailable("Home Assistant's WebSocket did not accept the connection.")
+                    for i, kind in commands.items():
+                        await ws.send_json({"id": i, "type": kind})
+                    while len(results) < len(commands):
+                        msg = await ws.receive_json(timeout=s.timeout)
+                        if isinstance(msg, dict) and msg.get("type") == "result" and msg.get("id") in commands:
+                            if not msg.get("success") or not isinstance(msg.get("result"), list):
+                                raise RegistryUnavailable("Home Assistant would not list its areas and devices. The token's user may not be allowed.")
+                            results[msg["id"]] = msg["result"]
+        except HAError:
+            raise
+        except ImportError:
+            raise RegistryUnavailable("Area and device data need the wsproto library, which this host does not have (see the plugin's design doc). Everything else works.") from None
+        except (TimeoutError, asyncio.CancelledError) as e:
+            if isinstance(e, asyncio.CancelledError):
+                raise
+            raise RegistryUnavailable("Home Assistant did not answer the area and device request in time.") from None
+        except Exception as e:  # noqa: BLE001 - the WebSocket client has its own exception family; log the class only
+            self._log.warning("home assistant registry read failed: %s", type(e).__name__)
+            if _cause_is_tls(e):
+                raise RegistryUnavailable("Home Assistant's certificate was not accepted for the WebSocket. Check ca_certificate.") from None
+            raise RegistryUnavailable("Cannot read area and device data from Home Assistant (the WebSocket failed).") from None
+        areas = {a["area_id"]: str(a.get("name") or "") for a in results[1] if isinstance(a, dict) and isinstance(a.get("area_id"), str)}
+        device_area = {d["id"]: d.get("area_id") for d in results[2] if isinstance(d, dict) and isinstance(d.get("id"), str)}
+        entity_area: dict[str, str] = {}
+        for e in results[3]:
+            if isinstance(e, dict) and isinstance(e.get("entity_id"), str):
+                area = e.get("area_id") or device_area.get(e.get("device_id"))
+                if isinstance(area, str):
+                    entity_area[e["entity_id"]] = area
+        return Registry(areas, entity_area)
