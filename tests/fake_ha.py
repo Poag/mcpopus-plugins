@@ -87,6 +87,10 @@ class FakeHA:
                          {"domain": "switch", "services": ["turn_on", "turn_off"]}]
         self.requests: list[tuple[str, str, dict]] = []
         self.writes: list[str] = []  # anything that could change state, or an unexpected command
+        self.service_calls: list[tuple[str, str, dict]] = []  # (domain, service, json body) of every POST to /api/services
+        self.call_status: int | None = None  # make only the service call fail
+        self.call_delay = 0.0  # make only the service call slow
+        self.extra_changed: list[str] = []  # entity ids a service call also reports as changed (as an automation would cause)
         self.auth_failures = 0
         self.ws_commands: list[str] = []
         self.ws_attempts = 0
@@ -153,7 +157,24 @@ class FakeHA:
         return await self._gate(r) or JSONResponse(self.services)
 
     async def _call(self, r):
-        return await self._gate(r) or JSONResponse([])
+        if (g := await self._gate(r)) is not None:
+            return g
+        body = await r.json()
+        d, sv = r.path_params["d"], r.path_params["s"]
+        self.service_calls.append((d, sv, body))
+        if self.call_delay:
+            await asyncio.sleep(self.call_delay)
+        if self.call_status:
+            return PlainTextResponse("failed", status_code=self.call_status)
+        changed = []
+        eid = body.get("entity_id")
+        if eid in self.states and (d, sv) in {("light", "turn_on"), ("light", "turn_off"), ("switch", "turn_on"), ("switch", "turn_off")}:
+            self.states[eid]["state"] = "on" if sv == "turn_on" else "off"
+            if "brightness" in body:
+                self.states[eid]["attributes"]["brightness"] = body["brightness"]
+            changed.append(self.states[eid])
+        changed += [self.states[e] for e in self.extra_changed if e in self.states]
+        return JSONResponse(changed)
 
     async def _template(self, r):
         return await self._gate(r) or PlainTextResponse("rendered")

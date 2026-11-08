@@ -43,10 +43,10 @@ READ_TOOLS = ["get_entity", "get_history", "get_logbook", "get_states", "list_ar
 DENIED = ["lock.front_door", "alarm_control_panel.house", "camera.driveway", "person.alex", "device_tracker.phone", "notify.mobile_app_alex", "sensor.secret_meter"]
 
 
-async def test_only_read_tools_exist(ha, tmp_path):
+async def test_only_read_tools_are_served_by_default(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, values(ha), SECRETS) as (c, lp, _):
         assert sorted(t.name for t in (await c.list_tools()).tools) == READ_TOOLS
-        assert {m.tier for m in lp.declared if m.kind == "tool"} == {"read"}
+        assert {m.name: m.tier for m in lp.declared if m.kind == "tool" and m.tier != "read"} == {"call_service": "write"}
         assert {m.name for m in lp.declared if m.kind == "tool" and not m.untrusted} == {"status"}
         err, text = await call(c, "call_service", {"domain": "light", "service": "turn_on"})
         assert err and "Unknown tool" in text

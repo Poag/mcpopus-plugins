@@ -55,3 +55,51 @@ class EntityPolicy:
 
         Only domains Home Assistant really has count, so version numbers and file names are not mistaken for entity ids."""
         return any(domain_of(t) in known_domains and not self.visible(t) for t in _TOKEN.findall(text.lower()) if ENTITY_RE.fullmatch(t))
+
+
+TARGET_KEYS = frozenset({"entity_id", "area_id", "device_id", "label_id", "floor_id", "target"})
+DATA_KEY_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+MAX_DATA_KEYS = 20
+MAX_DATA_CHARS = 2000
+
+
+def writable(policy: EntityPolicy, write_allow: tuple[str, ...], entity_id: str) -> bool:
+    """A write needs the entity to be visible AND to match the write allow list. An empty write list allows nothing."""
+    e = entity_id.lower()
+    return policy.visible(e) and any(fnmatch.fnmatchcase(e, p) for p in write_allow)
+
+
+def _strings(value, depth=0):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, (list, tuple)) and depth < 4:
+        for v in value:
+            yield from _strings(v, depth + 1)
+    elif isinstance(value, dict) and depth < 4:
+        for v in value.values():
+            yield from _strings(v, depth + 1)
+
+
+def check_service_data(data, target: str) -> str | None:
+    """Why the extra service data is refused, or None. The target is named separately and can never be widened by the data."""
+    import json
+
+    if not isinstance(data, dict):
+        return "data must be an object of service fields, for example {\"brightness\": 120}."
+    if len(data) > MAX_DATA_KEYS:
+        return f"data may have at most {MAX_DATA_KEYS} fields."
+    for key in data:
+        if not isinstance(key, str) or not DATA_KEY_RE.fullmatch(key):
+            return "data field names use lower-case letters, digits and underscores only."
+        if key in TARGET_KEYS:
+            return "data may not name targets (entity_id, area_id, device_id, label_id, floor_id or target). Use the entity_id argument for the one entity to change."
+    try:
+        text = json.dumps(data, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return "data must be plain JSON values."
+    if len(text) > MAX_DATA_CHARS:
+        return f"data is too large ({MAX_DATA_CHARS} characters at most)."
+    for s in _strings(data):
+        if ENTITY_RE.fullmatch(s.strip().lower()) and s.strip().lower() != target:
+            return "data may not refer to other entities."
+    return None

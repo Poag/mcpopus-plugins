@@ -21,6 +21,7 @@ import httpx2
 STATES_TTL = 3.0
 REGISTRY_TTL = 60.0
 REGISTRY_RETRY = 20.0
+SERVICES_TTL = 30.0
 AUTH_PAUSE = 60.0
 
 
@@ -89,6 +90,7 @@ class HomeAssistant:
         self._states: tuple[float, list[dict[str, Any]]] | None = None
         self._registry: tuple[float, Registry] | None = None
         self._registry_failed: tuple[float, RegistryUnavailable] | None = None
+        self._services: tuple[float, dict[str, dict[str, Any]]] | None = None
         self._reg_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
@@ -105,10 +107,14 @@ class HomeAssistant:
         return HAError("Home Assistant refused the access token. Check the token setting (it may have been revoked or mistyped).")
 
     async def _get_json(self, path: str, params: dict[str, str] | None = None, *, missing_ok: bool = False) -> Any:
+        return await self._request("GET", path, params, missing_ok=missing_ok)
+
+    async def _request(self, method: str, path: str, params: dict[str, str] | None = None, *, body: Any = None, missing_ok: bool = False) -> Any:
+        write = method != "GET"
         self._blocked()
         s: Settings = self._get()
         try:
-            async with self._http.stream("GET", s.base_url + path, params=params, headers={"Authorization": f"Bearer {s.token}", "Accept": "application/json"}) as r:
+            async with self._http.stream(method, s.base_url + path, params=params, json=body, headers={"Authorization": f"Bearer {s.token}", "Accept": "application/json"}) as r:
                 status = r.status_code
                 if status in (401, 403):
                     raise self._refused() if status == 401 else HAError("Home Assistant refused permission for this request. The token's user may not be allowed to read it.")
@@ -118,6 +124,10 @@ class HomeAssistant:
                     raise HAError("Home Assistant redirected the request. Check the base_url setting (for example http versus https, or a missing port).")
                 if status == 404:
                     raise HAError("Home Assistant does not have that endpoint. Check the base_url setting and that the api (or frontend) integration is enabled.")
+                if status == 400 and write:
+                    raise HAError("Home Assistant rejected the call. Check that the service accepts that entity and that the data fields are right for it.")
+                if status >= 500 and write:
+                    raise HAError("Home Assistant reported an error while carrying out the call. Check the entity's state before trying again.")
                 if status >= 400:
                     raise HAError(f"Home Assistant rejected the request (status {status}).")
                 body = bytearray()
@@ -128,6 +138,8 @@ class HomeAssistant:
         except HAError:
             raise
         except httpx2.TimeoutException:
+            if write:
+                raise HAError("Home Assistant did not answer in time, so the action may or may not have happened. Check the entity's state before trying again.") from None
             raise HAError("Home Assistant did not answer in time. Check the base_url and timeout_seconds settings.") from None
         except httpx2.UnsupportedProtocol:
             raise HAError("The base_url setting is not usable: it must start with http:// or https://.") from None
@@ -177,8 +189,21 @@ class HomeAssistant:
             raise HAError("Home Assistant returned an unexpected logbook reply.")
         return [d for d in data if isinstance(d, dict)]
 
+    async def state(self, entity_id: str) -> dict[str, Any] | None:
+        """One entity's state straight from Home Assistant (no cache), or None when it does not exist."""
+        data = await self._request("GET", f"/api/states/{quote(entity_id, safe='')}", missing_ok=True)
+        return data if isinstance(data, dict) else None
+
+    async def call_service(self, domain: str, service: str, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """POST one service call. The caller has already validated domain, service and body against the policy."""
+        data = await self._request("POST", f"/api/services/{quote(domain, safe='')}/{quote(service, safe='')}", body=body)
+        self._states = None  # the cached entity list is now stale
+        return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+
     async def services(self) -> dict[str, dict[str, Any]]:
         """domain -> service -> description. Tolerates both documented shapes (a list of names, or a mapping)."""
+        if self._services and time.monotonic() - self._services[0] < SERVICES_TTL:
+            return self._services[1]
         data = await self._get_json("/api/services")
         out: dict[str, dict[str, Any]] = {}
         for item in data if isinstance(data, list) else []:
@@ -189,6 +214,7 @@ class HomeAssistant:
                 out[item["domain"]] = {k: (v if isinstance(v, dict) else {}) for k, v in svc.items() if isinstance(k, str)}
             elif isinstance(svc, list):
                 out[item["domain"]] = {k: {} for k in svc if isinstance(k, str)}
+        self._services = (time.monotonic(), out)
         return out
 
     # ------------------------------------------------------------- registry
