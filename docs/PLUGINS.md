@@ -11,7 +11,7 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 | `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
 | `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled (write); list_automations (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
-| `swarmui` | planned | models, parameters, history (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | not built yet |
+| `swarmui` | see `plugins/swarmui/plugin.toml` | status, models, LoRAs, describe, parameters, images, job status (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | section 12 of the design |
 
 ## homeassistant
 
@@ -20,3 +20,12 @@ search, list, count and summary and is answered exactly like a missing one. Defa
 trackers and notifiers. Area and device data need the `wsproto` library in the host image (design doc, section 2); without it
 everything else still works. `call_service` (write, 0.2.0) calls one allowed service on one named, allowed entity and returns the state before and after; it is off until
 the owner ticks it, and it needs `allowed_services` and `write_entity_allowlist` as well (design, section 9). Automations can be listed, and triggered, enabled and disabled when they are in a Home Assistant category the owner names (section 9b); reading and editing definitions is designed but not built (section 9c). Needs: the Home Assistant address and a long-lived access token from a dedicated non-administrator user.
+
+## swarmui
+
+Generate images with a SwarmUI (Stable Diffusion) instance, within limits the plugin enforces: no `<...>` prompt commands unless the
+owner allows them, models and LoRAs only from the allow and deny lists, size, count, step, rate, queue and concurrency limits, extra
+settings only if the owner lists them. Use a dedicated SwarmUI user with a limited role and its own token; `status` warns if the account
+can do more than the connector needs. Generation and cancel are write tools, off until ticked by name. Claude cannot see the images (the
+host returns text only): results give paths and links. Live progress needs `wsproto` in the host image; without it generation still works.
+

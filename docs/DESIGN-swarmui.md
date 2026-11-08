@@ -1,8 +1,8 @@
-# swarmui: design (plan, nothing built)
+# swarmui: design
 
-Written 8 November 2026. Plan for a `swarmui` plugin (endpoint `/swarmui`) that lets Claude generate images with a SwarmUI instance
-(Stable Diffusion and its successors) and look at what the instance has. Status: **design only**; no code, no tests, nothing run against
-a real SwarmUI. Conventions and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract
+Written 8 November 2026. Specification of the `swarmui` plugin (endpoint `/swarmui`), version 0.1.0, which lets Claude generate images with a
+SwarmUI instance (Stable Diffusion and its successors) and look at what the instance has. Status: **built (all three phases, section 14)
+and tested against a fake SwarmUI only; never run against a real SwarmUI.** The live check is section 12. Conventions and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract
 is in the mcpopus repository.
 
 ## 1. Goal
@@ -71,7 +71,7 @@ file or refuse files over a size limit. Not assumed, not worked round.
 | `list_loras` | read, untrusted | 1 | Same for `subtype` LoRA |
 | `describe_model` | read, untrusted | 1 | One model's title, trigger phrase, tags, standard size. Free text from the model author, so untrusted and capped |
 | `list_parameters` | read | 1 | The generation parameters the plugin accepts (the intersection of Swarm's list and the plugin's allow list), with ranges |
-| `list_images` | read, untrusted | 1 | Recent images in the history: path, date, a trimmed summary of the prompt and model. Prompts are other people's text; filtered to this user's own history |
+| `list_images` | read, untrusted | 1 | Recent images in the history: path, model, size, the start of the prompt, and a link. Images made with a model the policy hides are left out. SwarmUI keeps history per account, so this is the token user's own |
 | `generate_image` | write | 2 | Starts a generation and waits up to `wait_seconds`; returns finished image paths or a job id |
 | `get_generation` | read | 2 | Status of a job started by this plugin: queued, running (percent if available), done with paths, failed |
 | `cancel_generation` | write | 2 | `InterruptAll` with `other_sessions` false, so only this plugin's session |
@@ -164,7 +164,7 @@ Claude (host limitation); multi-user impersonation (`impersonateUser`).
 7. Whether to add a content blocklist (`blocked_prompt_terms`) and whether prompts should be logged by length only (planned: length only).
 8. GPU and disk cost per generation on Alex's hardware; the defaults above are guesses to be tuned after the first live run.
 
-## 10. Phases
+## 10. Phases (all built)
 
 1. **Read-only** (`status`, models, LoRAs, describe, parameters, history). Design verified facts are in this document; tests against a fake
    SwarmUI over real HTTP that records every request; live check by Alex. Stop and report.
@@ -172,7 +172,7 @@ Claude (host limitation); multi-user impersonation (`impersonateUser`).
    list. Fake Swarm records every generation request and asserts none is sent when the tool is off or a rule refuses. Stop and report.
 3. **Optional**: live progress over WebSocket (needs `wsproto`), and image return if the host gains image results.
 
-## 11. Test plan
+## 11. Tests (as built)
 
 A fake SwarmUI served over real HTTP, driven by the real host manager and a real MCP client, as for the other plugins. It implements
 `GetNewSession` (with a permission list and session expiry), `GetCurrentStatus`, `ListModels`, `DescribeModel`, `ListT2IParams`,
@@ -183,14 +183,37 @@ identical; the token, session id and URL never in results, logs or audit; hostil
 data; session expiry retried once; an unneeded-permission warning; blocked and unreachable servers; bounded waits and job polling;
 cancel affects only this plugin's session.
 
-## 12. Acceptance checklist for Alex (sketch, finalised with the code)
+## 12. Acceptance checklist for Alex (live check)
 
-Create a dedicated SwarmUI user with a role holding only the four permissions in section 3 and a model allow list, turn on
-`AuthorizationRequired`, create an auth token for that user, then enter `base_url`, `auth_token`, `public_url` and a model allow list in
-the plugin. Ask Claude: run `status` (expect version, queue, the user name and no permission warning); list models and LoRAs
-(expect only the allowed ones); describe one; list recent images; try a model you did not allow (expect "No such model.").
-After phase 2: generate one small image, check it appears in SwarmUI under that user; try a prompt with `<lora:x>` (refused); try
-a request over the size limit (refused); cancel a long job; check that the token user cannot do anything else in the SwarmUI UI.
+Set-up in SwarmUI (Server, Users): make a **dedicated user** (for example `claude`) with a role that holds only `fundamental_generate_tab_access`,
+`fundamental_model_access`, `basic_image_generation` and `view_image_history`, with a model folder allow list if you want one. Turn on
+`AuthorizationRequired`. Log in as that user and create an auth token (User tab, Swarm Auth Tokens). In the host's admin UI install
+`swarmui` (Plugins, Fetch, Install, trust) and enter: `base_url` (for example `http://192.168.1.30:7801`), `auth_token` (the token), `public_url`
+(where you open SwarmUI in a browser; optional), `default_model` (optional), and, if you want, `model_allowlist` / `model_denylist`. Leave the
+limits at their defaults for the first run. Save and reload; tick the read tools. In claude.ai add `https://<host>/swarmui` as a connector.
+Then ask Claude, in order:
+
+1. "Run status." Expect the SwarmUI version, the user `claude`, the queue, "All the ones this connector needs are present", **no** warning
+   about extra permissions (if there is one, the role is broader than needed), and the limits.
+2. "List my models, then my LoRAs." Expect only models you allow. Ask it to describe one.
+3. "List parameters." Expect ranges for width, height, steps, cfgscale; nothing about init images or outputs.
+4. "List recent images." Expect your history, with links if `public_url` is set. Models you denied must not appear.
+5. "Describe the model <a model you denied>." Expect `No such model.`, the same as for a made-up name.
+
+Then enable generation: under Policy turn read-only off and tick `generate_image`, then `cancel_generation`; in claude.ai set both to
+**Needs approval**. Then:
+
+6. "Generate one 512x512 image of a red bicycle, 10 steps, using <a small model>." Approve. Expect either the finished path within 45 seconds,
+   or a job id; then "check that job" until it is done. Open the link or look in SwarmUI under the `claude` user's history.
+7. "Generate a picture with the prompt `a cat <lora:something:1>`." Expect it to be refused because of `<`.
+8. "Generate an image with <a model you denied>." Expect `No such model.`
+9. "Generate a 4096x4096 image" and "generate 10 images." Expect refusals naming `max_pixels` and `max_images_per_call`.
+10. Start a large, slow generation and say "cancel it." Expect "interrupt" and the job marked cancelled. Check in SwarmUI that your own
+    other sessions and other users were not interrupted.
+11. Ask for 5 generations in one minute. Expect the per-minute limit message after the 4th.
+12. Untick `generate_image`, reload, and ask again. Expect Claude to say it has no such tool.
+13. Optional (live progress): confirm `status` says "Live progress over WebSocket: on" (needs `wsproto` in the host image) and that a slow
+    job shows a percentage in `get_generation`. If it says off, everything else still works over plain requests.
 
 ## 13. Decisions needed from Alex
 
@@ -200,3 +223,29 @@ a request over the size limit (refused); cancel a long job; check that the token
 4. Whether prompt tag syntax should ever be allowed.
 5. Whether a content blocklist is wanted.
 6. Whether image-to-image, upscaling or video should be considered later (they need image inputs and a separate design).
+
+## 14. As built (8 November 2026)
+
+All three phases were built in one go at Alex's request, with the defaults in this document standing in for the open decisions in section 13.
+
+- Read tools: `status`, `list_models`, `list_loras`, `describe_model`, `list_parameters`, `list_images`, `get_generation`. Write tools:
+  `generate_image`, `cancel_generation`, each its own host tick. Nothing is `admin`.
+- LoRAs are passed as `<lora:name:weight>` tags that the plugin builds itself from validated names (the tag syntax is verified in
+  `Prompt Syntax.md`; whether a separate `loras` parameter exists is unverified, section 9 question 2). A caller's own prompt may not
+  contain `<`, so this is the only place tag syntax is written. Names that could break out of the tag (`< > : , | [ ] { } " '`) are refused.
+- Generation runs as a background job. `generate_image` waits `wait_seconds`, then returns the job id; `get_generation` reports
+  queued, running (with a percentage when WebSocket progress is on), done, failed or cancelled. Jobs are kept in memory only (50 at most).
+- WebSocket progress (phase 3) is used only when `progress_updates` is on and `wsproto` is installed; otherwise the plain HTTP route is
+  used. The choice is made before the request is sent, and a failed WebSocket is never retried as a second generation over HTTP.
+- Image return (phase 3) is **not built**: the host returns text only (section 3). Results carry paths and, with `public_url`, links.
+- `cancel_generation` sends `InterruptAll` with `other_sessions: false`. It stops all of this connector's running jobs, because they share
+  one SwarmUI session. Unloading or reloading the plugin does the same for jobs still running.
+- SwarmUI's own error text is never repeated (a tool error reaches the model without the untrusted wrapper); the plugin says what failed
+  and which setting to check. A reply that mentions permissions is reported as a missing permission without echoing it.
+- Tests (fake SwarmUI over real HTTP and WebSocket, real host manager, real MCP client): 33, in `tests/test_swarmui.py` and
+  `tests/test_swarmui_generate.py`. Each protection was broken in turn and made at least one test fail: the prompt `<` rule, model
+  visibility, LoRA validation, the pixel, rate, queue and concurrency limits, the extra-setting allow list, the image path check, the
+  history model policy, the interrupt scope, the teardown interrupt, and the no-silent-fallback rule.
+- Not tested: the job timeout (30 seconds at least, too slow for the suite); any real SwarmUI; large real images; behaviour with the
+  release in use of the parameter ids and the `GenerateText2Image` reply when the backend is down.
+

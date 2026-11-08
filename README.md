@@ -15,6 +15,7 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | Understand how the Obsidian plugin works | [docs/DESIGN.md](docs/DESIGN.md) |
 | Set up the email (IMAP) plugin | [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md) |
 | Set up the Home Assistant plugin | [docs/DESIGN-homeassistant.md](docs/DESIGN-homeassistant.md) (section 10) |
+| Set up the SwarmUI plugin | [docs/DESIGN-swarmui.md](docs/DESIGN-swarmui.md) (section 12) |
 | Check what is trusted and what is not | [mcpopus: docs/SECURITY.md](https://github.com/Poag/mcpopus/blob/main/docs/SECURITY.md) |
 
 | Plugin | What it does | State |
@@ -22,6 +23,7 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags; folder-limited write, move and delete (off by default) |
 | [`email`](plugins/email) | Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list, search and read messages | Read-only: nothing is marked read, moved or deleted. No write tools |
 | [`homeassistant`](plugins/homeassistant) | Read the state of a Home Assistant home: entities, areas, history, logbook, with entity and domain policy enforced by the plugin | Read tools, plus write tools (`call_service`, automation trigger and enable) that are off until enabled and allowed by name. Area data needs `wsproto` in the host image |
+| [`swarmui`](plugins/swarmui) | Generate images with a SwarmUI (Stable Diffusion) instance within enforced limits; list models, LoRAs, parameters and history | Read tools, plus generate and cancel (write, off until enabled). Images are not shown to Claude |
 
 Design and specification: [docs/DESIGN.md](docs/DESIGN.md) and [docs/email.md](docs/email.md). Email set-up: [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md). Catalogue: [docs/PLUGINS.md](docs/PLUGINS.md). Build log: [docs/BUILD_LOG.md](docs/BUILD_LOG.md). Third-party notices: [NOTICE.md](NOTICE.md).
 

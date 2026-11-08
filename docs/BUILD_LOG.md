@@ -3,6 +3,23 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-08: swarmui 0.1.0 (built: read tools, generation, optional WebSocket progress)
+
+Alex asked to build all phases and test at the end. Built to the plan in `docs/DESIGN-swarmui.md` (section 14 lists what was built and what
+was not): HTTP background jobs, least-privilege Swarm user as the main control, prompt tag syntax refused by default (LoRAs become
+validated tags), size, rate, queue and concurrency limits, model allow and deny lists, an allow list for extra settings with image
+inputs and output locations never allowed, image paths filtered, SwarmUI's own error text never repeated, interrupt scoped to this
+connector's session. WebSocket progress only when `wsproto` exists, never as a silent second generation. Images are not returned to
+Claude (host limitation). 33 new tests, all protections mutation-checked.
+
+Lessons: the first WebSocket error path swallowed the real error because the client wraps failures in exception groups; both WebSocket
+readers (swarmui and the homeassistant registry reader) now classify the first real exception, and the homeassistant one now reports a
+refused token as such. A test that checked "prompts are not logged" failed because the test client's own debug output logged the
+request, so it now looks at the plugin's loggers only.
+
+Unverified: everything against a real SwarmUI; parameter ids and the LoRA parameter for the release in use; queue behaviour; the job
+timeout path (untested, 30 seconds minimum).
+
 ## 2026-11-08: swarmui plan (design only)
 
 Alex asked for a plan for a SwarmUI plugin. Written as `docs/DESIGN-swarmui.md`; no code. Verified from the SwarmUI repository's own API
