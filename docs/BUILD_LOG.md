@@ -3,6 +3,33 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-09: homeassistant 0.3.0 (automations)
+
+Alex asked to integrate with automations: list and inspect, trigger, enable and disable, read definitions, and create, edit or delete, with
+control limited to "those in a specified category". Built: the first three (the last two designed in section 9c, not built).
+
+### Verified (Home Assistant core source, `dev` branch, 9 November 2026)
+
+- Automation services and their field defaults; `skip_condition` defaults to true (conditions skipped). The plugin always sends false.
+- Category registry list command and the `categories` field on entity-registry entries (read-only WebSocket, same as areas).
+- The automation config API is administrator-only, replaces a whole automation, rewrites `automations.yaml`, reloads, and on delete
+  also removes the registry entry. A category cannot be set through it.
+
+### Decisions
+
+- The category fence needs registry data over WebSocket, so the automation tools depend on `wsproto` in the host image, the same
+  host change areas need. Without it they fail closed and say why. A write-pattern (`write_entity_allowlist`) fallback exists.
+- Dedicated tools instead of letting `call_service` take automation services: each gets its own host tick, always respects conditions,
+  and cannot be used to bypass the category rule. `automation.*` in `allowed_services` is refused at load.
+- Reading and editing definitions is not built: it needs an administrator token, rewrites a YAML file, and a created automation runs
+  outside the plugin's policy. Design and the open decisions are in section 9c.
+
+### Verified by tests
+
+Eleven new tests (fake Home Assistant, real host manager and client). Mutation checks: sending `skip_condition: true`, `stop_actions: true`,
+ignoring the category fence, removing the hidden-entity check, and removing the rate limit each fail at least one test. Unverified: all
+of it against the real Home Assistant (section 10c), and whether a disabled automation can still be triggered by the service.
+
 ## 2026-11-08: homeassistant 0.2.0 (call_service)
 
 ### Decisions

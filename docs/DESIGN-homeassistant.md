@@ -1,9 +1,9 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.2.0. Reads, plus one write tool (`call_service`) that is off until the owner enables it and names what it may do. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.3.0. Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
-(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0) is built and tested against a fake
-Home Assistant only; its live check is section 10b.
+(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0) and the automation tools (0.3.0) are
+built and tested against a fake Home Assistant only; their live checks are sections 10b and 10c.
 
 ## 1. Goal
 
@@ -31,6 +31,9 @@ development branch, so details may differ from the release Alex runs (unverified
 | `GET /api/logbook/<start>` takes optional `entity` and `end_time`. **The REST logbook view does no per-user filtering**: it never consults the user's permissions, and without `entity` it returns the whole window for every entity. Each entry carries `context_*` fields that can name other entities | Core `components/logbook/rest_api.py`; Docs `docs/api/rest.md` |
 | `GET /api/services` returns a list of `{"domain", "services"}`; the docs show service names as a list, the source puts a mapping of descriptions there. The plugin accepts both | Docs `docs/api/rest.md`; Core `components/api/__init__.py` (`async_services_json`) |
 | `POST /api/services/<domain>/<service>` takes `service_data` (which may itself hold `entity_id`, `area_id`, `device_id`, `label_id`), returns the list of states changed under the call's context (which can include entities the caller never named), and needs `?return_response` for services that return data | Docs `docs/api/rest.md`; Core `components/api/__init__.py` |
+| Automation services are `turn_on`, `turn_off` (field `stop_actions`, default true), `toggle`, `trigger` (field `skip_condition`, **default true**, which runs the actions while ignoring the automation's conditions) and `reload` | Core `components/automation/services.yaml` |
+| Categories are read over the same read-only WebSocket: `config/category_registry/list` with `scope` (`automation`), not administrator-only, entries `{category_id, name, icon}`; each entity-registry entry carries `categories` (for example `{"automation": "<id>"}`) | Core `components/config/category_registry.py`, `helpers/category_registry.py`, `helpers/entity_registry.py` |
+| Automation definitions are edited through `/api/config/automation/config/<id>` (GET, POST, DELETE), **all administrator-only**. POST validates the whole automation, rewrites `automations.yaml` with that id's config replaced, and reloads it; DELETE removes the YAML entry and the entity-registry entry | Core `components/config/view.py`, `components/config/automation.py` |
 | `POST /api/template` is administrator-only and runs arbitrary templates. Not used | Core `components/api/__init__.py` (`@require_admin`) |
 | `GET /api/config` returns version, latitude, longitude, elevation, `config_dir`, URLs. The plugin reads only `version` | Docs `docs/api/rest.md` |
 | A wrong token counts toward Home Assistant's IP ban only when `login_attempts_threshold` is set; the default means no banning | Core `components/http/ban.py`, `components/http/__init__.py` (`NO_LOGIN_ATTEMPT_THRESHOLD`) |
@@ -133,6 +136,9 @@ as data and caps their size).
 | `list_areas` | `area`, `limit`, `offset` | Areas with visible entity counts, or the visible entities in one area |
 | `list_services` | `domain` | The services in `allowed_services` with their descriptions, and the entities `call_service` may act on. Empty by default |
 | `call_service` | `domain`, `service`, `entity_id`, `data` | **Tier write.** One service on one named entity; returns its state before and after. Section 9 |
+| `list_automations` | `category`, `state`, `limit`, `offset` | Automations with state, last run, running count, category, and whether this connector may control each. Read |
+| `trigger_automation` | `entity_id` | **Tier write.** Runs one automation with its conditions respected. Section 9b |
+| `set_automation_enabled` | `entity_id`, `enabled` | **Tier write.** Enables or disables one automation without stopping a run in progress. Section 9b |
 
 Not built, on purpose: the template endpoint, a raw API pass-through, any call to an arbitrary URL, the camera proxy, the error log,
 event firing, state setting, WebSocket subscriptions, group, area, device and "all" targets, and responses from services (`return_response`).
@@ -150,6 +156,7 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `domain_denylist` | the six domains above | Replacing the list removes the defaults |
 | `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Empty means no service may be called |
 | `write_entity_allowlist` | empty | Globs for the entities `call_service` may act on. Separate from what can be read: an entity must also be visible. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
+| `automation_categories` | empty | Names of Home Assistant automation categories (case-insensitive). Automations in these categories can be triggered, enabled and disabled. Empty means none, except automations matching `write_entity_allowlist` |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
 | `max_results` | 50 | 1 to 500 |
 | `max_history_hours` | 72 | 1 to 720 |
@@ -215,6 +222,59 @@ entity to `write_entity_allowlist` is a separate decision, and a garage door in 
 Not supported: `return_response` services, group, area, device or label targets, services in another domain than the entity's, scripts,
 scenes and automations (their domains are not on the allowlist, and an allowlisted pair must match the entity's domain).
 
+## 9b. Automations: list, trigger, enable and disable (0.3.0)
+
+An automation can do anything, including things the entity policy hides, so **the category is the control**: only automations the owner put
+in a category named in `automation_categories` can be controlled. Reading and listing follow the normal read policy.
+
+- `list_automations` shows every visible automation with a `controllable: yes/no` flag, so the model can tell which it may act on.
+- `trigger_automation` always sends `skip_condition: false`, so the automation's own conditions still apply. Home Assistant's default
+  is to skip them; the plugin never does, and there is no way to ask it to. `set_automation_enabled` disables with `stop_actions: false`,
+  so a run in progress is left to finish.
+- Each tool is its own host tick, so the owner can allow listing and enabling but not triggering, or the reverse. They share the
+  `call_service` rate limit, are never retried, and return state, last run and running count before and after, plus other visible
+  entities the call changed.
+- Order of checks: well-formed automation id; entity exists and is visible (`No such entity.`, the same for hidden and missing); then
+  the category or write-pattern check (`This connector may not control that automation ...`, said only about an automation that is
+  visible anyway). If category data is unavailable (no `wsproto`, see section 2) the answer says so and nothing is controllable except
+  automations matching `write_entity_allowlist`: it fails closed.
+- `automation.*` services cannot be put in `allowed_services` (refused at load), so `call_service` cannot be used to bypass the
+  condition and category rules.
+- The fence is only as safe as the category's contents. A trigger runs the automation's actions, which can touch locks or anything else.
+  Put an automation in the category only if you are content for Claude to run it.
+
+## 9c. Reading and editing automation definitions (designed, not built)
+
+Alex asked for reading definitions and for creating, editing and deleting automations. Not built yet, because it changes the risk
+picture and needs decisions. What was verified (section 2): the config API is administrator-only, replaces a whole automation per save,
+and rewrites `automations.yaml`. What follows is the design to build once the decisions below are made.
+
+Why it is different: an automation Claude writes runs later with no plugin policy in the loop. A created automation could unlock a door
+on a schedule. The plugin's entity and service lists cannot constrain an automation after it is saved, so the constraint has to be on
+what may be saved.
+
+Proposed controls:
+
+1. **A second, optional secret, `admin_token`**, used only for these tools. The ordinary `token` stays a non-administrator user's, so a
+   leak of it still cannot edit anything. Without `admin_token` the tools are not usable.
+2. **Fence by config id, not category**: Claude may edit or delete only automations whose config `id` starts with `claude_`, and creates
+   only such ids. Human-written automations can be read (if the definition passes the filter below) but never changed or deleted. (A
+   category cannot be assigned through the config API; assigning one needs an administrator registry call.)
+3. **Strict subset on save.** Reject anything that is not: triggers of type `state`, `numeric_state`, `time`, `time_pattern`, `sun` on
+   visible entities; conditions of type `state`, `numeric_state`, `time`, `sun`; actions that are only `action: domain.service` calls
+   on pairs in `allowed_services` against entities in `write_entity_allowlist` (the same checks as `call_service`), or `delay`. No
+   templates anywhere (any string containing `{{` or `{%` is refused), no scripts, scenes, `choose`, `repeat`, `event`, `webhook` or
+   `homeassistant` services.
+4. **New automations start disabled** (`initial_state: false`, to be verified in Home Assistant's automation schema), and the tool tells
+   the owner to review and enable it in Home Assistant, or to call `set_automation_enabled` if it is in an allowed category.
+5. **Reading a definition** (read tier, administrator token): refused as "not available" (the same text as missing) if the definition
+   mentions a hidden entity, a denied domain, or contains templates, so definitions cannot be used to find hidden things.
+6. Tiers: `save_automation` write, `delete_automation` admin. The admin audit lines record the automation id and nothing else.
+7. A read-modify-write on `automations.yaml` loses hand-written YAML comments (Home Assistant rewrites the file). The tool says so.
+
+Decisions needed from Alex before this is built: whether to create an administrator token at all; the `claude_` id prefix rule; whether
+the subset above is acceptable or too narrow; whether created automations must start disabled.
+
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
 Set-up: in Home Assistant create a **non-administrator user** for this connector and, from that user's profile, a long-lived access
@@ -261,6 +321,22 @@ connector's tool permissions and set Call service to Needs approval. Update the 
 9. Ask for 12 calls in a minute (for example repeated on and off). Expect the rate-limit message after 10.
 10. In Home Assistant check the logbook: only the changes you approved, made by the connector's user.
 11. In the host's Policy page untick `call_service`, reload, and ask again. Expect Claude to say it has no such tool.
+
+## 10c. Acceptance checklist for the automation tools (Alex, against the real Home Assistant)
+
+In Home Assistant create a category called `Claude` for automations (Settings, Automations, Categories) and put **one harmless
+automation** in it (for example one that turns the porch light on and off). Update the plugin (0.3.0), set `automation_categories` to
+`Claude`, under Policy tick `trigger_automation` and `set_automation_enabled`, and set both to Needs approval in claude.ai. Area and
+category data need `wsproto` in the host image: without it the tools refuse everything and say why. Then:
+
+1. "List my automations." Expect all of them, with the Claude-category one marked `controllable: yes` and the rest `no`.
+2. "Trigger <the harmless automation>." Approve. Expect its last-run time to change and the light to react. If its conditions are not
+   met nothing happens, and that is correct.
+3. "Disable it", then "enable it". Expect off, then on.
+4. "Trigger <an automation outside the category>." Expect "may not control that automation" and no change.
+5. "Trigger automation.does_not_exist" and one you hid in `entity_denylist`. Expect the same "No such entity." for both.
+6. In the logbook confirm only the approved actions happened, and that the automation's conditions were respected (put a false
+   condition on it once and trigger: nothing should run).
 
 ## 11. Live check results
 

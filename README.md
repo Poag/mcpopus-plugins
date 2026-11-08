@@ -21,7 +21,7 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | --- | --- | --- |
 | [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags; folder-limited write, move and delete (off by default) |
 | [`email`](plugins/email) | Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list, search and read messages | Read-only: nothing is marked read, moved or deleted. No write tools |
-| [`homeassistant`](plugins/homeassistant) | Read the state of a Home Assistant home: entities, areas, history, logbook, with entity and domain policy enforced by the plugin | Read tools, plus one write tool (`call_service`) that is off until enabled and allowed by name. Area data needs `wsproto` in the host image |
+| [`homeassistant`](plugins/homeassistant) | Read the state of a Home Assistant home: entities, areas, history, logbook, with entity and domain policy enforced by the plugin | Read tools, plus write tools (`call_service`, automation trigger and enable) that are off until enabled and allowed by name. Area data needs `wsproto` in the host image |
 
 Design and specification: [docs/DESIGN.md](docs/DESIGN.md) and [docs/email.md](docs/email.md). Email set-up: [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md). Catalogue: [docs/PLUGINS.md](docs/PLUGINS.md). Build log: [docs/BUILD_LOG.md](docs/BUILD_LOG.md). Third-party notices: [NOTICE.md](NOTICE.md).
 
