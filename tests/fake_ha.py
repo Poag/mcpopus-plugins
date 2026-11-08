@@ -42,6 +42,10 @@ def build_home() -> dict:
         st("person.alex", "home", friendly_name="Alex", latitude=51.5, longitude=-0.12),
         st("device_tracker.phone", "home", friendly_name="Phone", latitude=51.5),
         st("notify.mobile_app_alex", "unknown", friendly_name="Mobile App"),
+        st("automation.porch_evening", "on", friendly_name="Porch Evening", id="1001", last_triggered="2026-11-07T18:00:00+00:00", mode="single", current=0),
+        st("automation.garage_night", "on", friendly_name="Garage Night", id="1002", last_triggered=None, mode="single", current=0),
+        st("automation.lock_up", "on", friendly_name="Lock Up", id="1003", last_triggered="2026-11-07T23:00:00+00:00", mode="single", current=0),
+        st("automation.secret_routine", "on", friendly_name="Secret Routine", id="1004", last_triggered=None, mode="single", current=0),
         st("sensor.many_attrs", "1", friendly_name="Many", **{f"attr_{i:03d}": "v" * 600 for i in range(80)}),
     ]
     states += [st(f"sensor.bulk_{i:03d}", str(i), friendly_name=f"Bulk {i:03d}") for i in range(120)]
@@ -52,6 +56,10 @@ def build_home() -> dict:
         {"entity_id": "switch.garage_fan", "area_id": "garage", "device_id": None},
         {"entity_id": "lock.front_door", "area_id": None, "device_id": "dev_lock"},
         {"entity_id": "camera.driveway", "area_id": "vault", "device_id": None},
+        {"entity_id": "automation.porch_evening", "area_id": None, "device_id": None, "categories": {"automation": "cat_claude"}},
+        {"entity_id": "automation.garage_night", "area_id": None, "device_id": None, "categories": {"automation": "cat_other"}},
+        {"entity_id": "automation.lock_up", "area_id": None, "device_id": None, "categories": {}},
+        {"entity_id": "automation.secret_routine", "area_id": None, "device_id": None, "categories": {"automation": "cat_claude"}},
     ]
     areas = [{"area_id": "kitchen", "name": "Kitchen"}, {"area_id": "hallway", "name": "Hallway"}, {"area_id": "garage", "name": "Garage"},
              {"area_id": "vault", "name": "Vault"}, {"area_id": "empty", "name": "Empty Room"}]
@@ -81,7 +89,10 @@ class FakeHA:
             {"when": "2026-11-06T07:50:00+00:00", "name": "Other", "message": "changed", "entity_id": "light.hall", "domain": "light"},
             {"when": "2026-11-06T07:55:00+00:00", "name": "Hostile", "message": "changed", "entity_id": "sensor.hostile_name", "domain": "sensor"},
         ]
-        self.services = [{"domain": "light", "services": {"turn_on": {"name": "Turn on", "description": "Turn on a light.", "fields": {"brightness": {}, "color_name": {}}},
+        self.services = [{"domain": "automation", "services": {"trigger": {"name": "Trigger", "description": "Trigger an automation.", "fields": {"skip_condition": {}}},
+                                                               "turn_on": {"name": "Turn on", "description": "Enable.", "fields": {}},
+                                                               "turn_off": {"name": "Turn off", "description": "Disable.", "fields": {"stop_actions": {}}}}},
+                         {"domain": "light", "services": {"turn_on": {"name": "Turn on", "description": "Turn on a light.", "fields": {"brightness": {}, "color_name": {}}},
                                                           "turn_off": {"name": "Turn off", "description": "Turn off.", "fields": {}}}},
                          {"domain": "lock", "services": {"unlock": {"name": "Unlock", "description": "Unlock a lock.", "fields": {}}}},
                          {"domain": "switch", "services": ["turn_on", "turn_off"]}]
@@ -94,6 +105,8 @@ class FakeHA:
         self.auth_failures = 0
         self.ws_commands: list[str] = []
         self.ws_attempts = 0
+        self.categories = [{"category_id": "cat_claude", "name": "Claude"}, {"category_id": "cat_other", "name": "Other"}]
+        self.categories_supported = True
         self.delay = 0.0
         self.status_override: int | None = None
         self.body_override: bytes | None = None
@@ -168,7 +181,13 @@ class FakeHA:
             return PlainTextResponse("failed", status_code=self.call_status)
         changed = []
         eid = body.get("entity_id")
-        if eid in self.states and (d, sv) in {("light", "turn_on"), ("light", "turn_off"), ("switch", "turn_on"), ("switch", "turn_off")}:
+        if eid in self.states and d == "automation":
+            if sv == "trigger":
+                self.states[eid]["attributes"]["last_triggered"] = "2026-11-08T12:00:00+00:00"
+            elif sv in ("turn_on", "turn_off"):
+                self.states[eid]["state"] = "on" if sv == "turn_on" else "off"
+            changed.append(self.states[eid])
+        elif eid in self.states and (d, sv) in {("light", "turn_on"), ("light", "turn_off"), ("switch", "turn_on"), ("switch", "turn_off")}:
             self.states[eid]["state"] = "on" if sv == "turn_on" else "off"
             if "brightness" in body:
                 self.states[eid]["attributes"]["brightness"] = body["brightness"]
@@ -206,7 +225,11 @@ class FakeHA:
                 kind = msg.get("type")
                 self.ws_commands.append(kind)
                 lists = {"config/area_registry/list": self.areas, "config/device_registry/list": self.devices, "config/entity_registry/list": self.reg_entities}
-                if kind in lists:
+                if kind == "config/category_registry/list":
+                    ok = self.categories_supported and msg.get("scope") == "automation"
+                    await ws.send_json({"id": msg["id"], "type": "result", "success": ok, "result": self.categories} if ok
+                                       else {"id": msg["id"], "type": "result", "success": False, "error": {"code": "unknown_command", "message": "no"}})
+                elif kind in lists:
                     await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": lists[kind]})
                 else:
                     self.writes.append(f"WS {kind}")

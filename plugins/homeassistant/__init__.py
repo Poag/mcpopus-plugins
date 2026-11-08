@@ -34,6 +34,7 @@ class Config(BaseModel):
     domain_denylist: list[str] = Field(DEFAULT_DENIED_DOMAINS, description="Whole domains that are never visible (one per line). Replacing this list removes the defaults. Suggested defaults, for you to change")
     allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
     write_entity_allowlist: list[str] = Field([], description="Entities call_service may act on (one pattern per line, for example light.*). Empty means none: this is separate from what can be read, and an entity must also be visible. Needs the call_service tool ticked under Policy in the admin UI")
+    automation_categories: list[str] = Field([], description="Automations in these Home Assistant categories (names, one per line) may be triggered, enabled and disabled by the automation tools. Empty means none, except automations matching write_entity_allowlist")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -95,6 +96,16 @@ class Config(BaseModel):
             raise ValueError("entries must look like light.turn_on (domain.service, no wildcards)")
         return out
 
+    @field_validator("automation_categories", mode="before")
+    @classmethod
+    def _categories(cls, v):
+        if not isinstance(v, list):
+            return v
+        out = [x.strip().casefold() for x in v if isinstance(x, str) and x.strip()]
+        if len(out) > 20 or any(len(c) > 80 or _CTRL.search(c) for c in out):
+            raise ValueError("at most 20 category names of up to 80 characters, no control characters")
+        return out
+
     @field_validator("redact_attributes", mode="before")
     @classmethod
     def _redact(cls, v):
@@ -105,6 +116,8 @@ class Config(BaseModel):
         denied = set(self.domain_denylist)
         if any(domain_of(s) in denied for s in self.allowed_services):
             raise ValueError("allowed_services contains a service in a domain listed in domain_denylist; remove one or the other")
+        if any(domain_of(sv) == "automation" for sv in self.allowed_services):
+            raise ValueError("allowed_services may not contain automation services; use automation_categories with the automation tools instead")
         if any(p.split(".", 1)[0] in denied for p in self.write_entity_allowlist):
             raise ValueError("write_entity_allowlist contains a pattern in a domain listed in domain_denylist; remove one or the other")
         return self
@@ -203,6 +216,8 @@ class HomeAssistantPlugin(Plugin):
             f"call_service: {len(cfg.allowed_services)} service(s) allowed; {len(cfg.write_entity_allowlist)} entity pattern(s) it may act on"
             + (" (none: nothing can be changed)." if not cfg.write_entity_allowlist or not cfg.allowed_services else ".")
             + " It is only available if the owner ticked it under Policy.",
+            "Automations Claude may trigger or switch: " + (f"categories {', '.join(cfg.automation_categories)}" if cfg.automation_categories else "no category set")
+            + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
         return "\n".join(lines)
 
@@ -425,6 +440,105 @@ class HomeAssistantPlugin(Plugin):
             lines.append("other visible entities that changed: " + ", ".join(also[:20]) + (f" and {len(also) - 20} more" if len(also) > 20 else ""))
         lines.append("A device can take a moment to report its new state; run get_entity to confirm if it still shows the old one.")
         return "\n".join(lines)
+
+    # ----------------------------------------------------------- automations
+    def _take_write_slot(self) -> None:
+        cfg = self.ctx.config
+        now = time.monotonic()
+        while self._write_times and now - self._write_times[0] > 60:
+            self._write_times.popleft()
+        if len(self._write_times) >= cfg.max_writes_per_minute:
+            raise ToolError(f"Too many service calls in the last minute ({cfg.max_writes_per_minute}, the max_writes_per_minute setting). Wait and try again.")
+        self._write_times.append(now)
+
+    async def _automation_may_run(self, eid: str, registry) -> bool:
+        """An automation may be controlled when it is in an allowed category, or matches the write list."""
+        cats = frozenset(self.ctx.config.automation_categories)
+        if writable(self.policy, self.write_allow, eid):
+            return True
+        return bool(registry is not None and cats and registry.automation_category(eid).casefold() in cats)
+
+    async def _automation_target(self, entity_id: str) -> str:
+        eid = self._entity_id(entity_id)
+        if domain_of(eid) != "automation":
+            raise ToolError("entity_id must be an automation, like automation.porch_lights.")
+        if eid not in await self._visible_states_guarded():
+            return self._refuse("No such entity.")  # hidden and missing look the same
+        registry = await self._registry_or_none()
+        if not await self._automation_may_run(eid, registry):
+            note = "" if registry is not None else " Category information is not available right now (run status), so only automations on the write list can be controlled."
+            return self._refuse("This connector may not control that automation (it is not in a category the owner allowed)." + note)
+        return eid
+
+    def _auto_brief(self, s: dict) -> str:
+        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
+        return f"{tx.clean(s.get('state', ''), 40)}, last run {tx.clean(attrs.get('last_triggered') or 'never', 40)}, running {tx.clean(attrs.get('current', 0), 10)}"
+
+    async def _automation_call(self, eid: str, service: str, data: dict, headline: str) -> str:
+        before = await self._guard(self.ha.state(eid))
+        if before is None:
+            return self._refuse("No such entity.")
+        self._take_write_slot()
+        changed = await self._guard(self.ha.call_service("automation", service, {**data, "entity_id": eid}))
+        after = await self._guard(self.ha.state(eid))
+        self.ctx.logger.info("automation service called: automation.%s on %s", service, eid)
+        stats = getattr(self.ctx, "stats", None)
+        if stats is not None:
+            stats.count("service_calls", 1)
+        also = sorted({c["entity_id"] for c in changed if isinstance(c.get("entity_id"), str) and c["entity_id"] != eid and self.policy.visible(c["entity_id"])})
+        lines = [headline, f"before: {self._auto_brief(before)}", f"after: {self._auto_brief(after) if after else 'unknown'}"]
+        if also:
+            lines.append("other visible entities that changed: " + ", ".join(also[:20]) + (f" and {len(also) - 20} more" if len(also) > 20 else ""))
+        lines.append("An automation's actions can take a moment and can change things this connector cannot show; check with get_entity or the logbook.")
+        return "\n".join(lines)
+
+    @tool(tier="read", untrusted=True)
+    async def list_automations(self, category: str = "", state: str = "", limit: int = 0, offset: int = 0) -> str:
+        """List automations: id, name, on or off, last run, how many runs are active, category, and whether this connector may control it. Filter by category (name) or state (on or off)."""
+        category, state = str(category or "").strip().casefold(), str(state or "").strip().lower()
+        if max(len(category), len(state)) > 100:
+            raise ToolError("Search values are limited to 100 characters.")
+        limit, offset = self._limit(limit), max(0, offset if isinstance(offset, int) and not isinstance(offset, bool) else 0)
+        states = {e: s for e, s in (await self._visible_states_guarded()).items() if domain_of(e) == "automation"}
+        registry = None
+        if category:
+            try:
+                registry = await self._guard(self.ha.registry())
+            except ToolError:
+                raise ToolError("Filtering by category needs category data, which is not available right now. Run status to see why.") from None
+        else:
+            registry = await self._registry_or_none()
+        hits = [e for e in sorted(states) if (not state or str(states[e].get("state", "")).lower() == state)
+                and (not category or (registry is not None and registry.automation_category(e).casefold() == category))]
+        page = hits[offset: offset + limit]
+        head = f"{len(hits)} automations (showing {offset + 1 if page else 0} to {offset + len(page)})."
+        if offset + len(page) < len(hits):
+            head += f" Use offset {offset + len(page)} for the next page."
+        rows = []
+        for e in page:
+            s = states[e]
+            attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
+            cat = registry.automation_category(e) if registry is not None else ""
+            may = "yes" if await self._automation_may_run(e, registry) else "no"
+            rows.append(f"- {e} | {self._name(s) or '-'} | {tx.clean(s.get('state', ''), 20)} | last run {tx.clean(attrs.get('last_triggered') or 'never', 40)} | running {tx.clean(attrs.get('current', 0), 10)}"
+                        + (f" | category: {tx.clean(cat, 60)}" if cat else "") + f" | controllable: {may}")
+        return "\n".join([head, *rows])
+
+    @tool(tier="write", untrusted=True)
+    async def trigger_automation(self, entity_id: str) -> str:
+        """Run one automation now (only one in a category the owner allowed). The automation's own conditions are respected: if they are not met, it does nothing. Returns its state and last run before and after."""
+        eid = await self._automation_target(entity_id)
+        return await self._automation_call(eid, "trigger", {"skip_condition": False}, f"Triggered {eid} (its conditions still apply).")
+
+    @tool(tier="write", untrusted=True)
+    async def set_automation_enabled(self, entity_id: str, enabled: bool) -> str:
+        """Switch one automation on (enabled true) or off (enabled false), only one in a category the owner allowed. Disabling does not stop a run that is already in progress."""
+        if not isinstance(enabled, bool):
+            raise ToolError("enabled must be true or false.")
+        eid = await self._automation_target(entity_id)
+        if enabled:
+            return await self._automation_call(eid, "turn_on", {}, f"Enabled {eid}.")
+        return await self._automation_call(eid, "turn_off", {"stop_actions": False}, f"Disabled {eid} (a run already in progress is left to finish).")
 
     def _brief(self, s: dict) -> str:
         attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}

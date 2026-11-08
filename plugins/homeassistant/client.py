@@ -45,9 +45,14 @@ class Settings:
 class Registry:
     areas: dict[str, str] = field(default_factory=dict)  # area id -> name
     entity_area: dict[str, str] = field(default_factory=dict)  # entity id -> area id (the entity's own, else its device's)
+    categories: dict[str, str] = field(default_factory=dict)  # automation category id -> name
+    entity_category: dict[str, str] = field(default_factory=dict)  # automation entity id -> category id
 
     def area_name(self, entity_id: str) -> str:
         return self.areas.get(self.entity_area.get(entity_id, ""), "")
+
+    def automation_category(self, entity_id: str) -> str:
+        return self.categories.get(self.entity_category.get(entity_id, ""), "")
 
 
 def ssl_context(verify: bool, ca_pem: str) -> ssl.SSLContext:
@@ -240,7 +245,9 @@ class HomeAssistant:
         self._blocked()
         s: Settings = self._get()
         ws_url = ("wss://" if s.base_url.startswith("https://") else "ws://") + s.base_url.split("://", 1)[1] + "/api/websocket"
-        commands = {1: "config/area_registry/list", 2: "config/device_registry/list", 3: "config/entity_registry/list"}
+        commands = {1: {"type": "config/area_registry/list"}, 2: {"type": "config/device_registry/list"}, 3: {"type": "config/entity_registry/list"},
+                    4: {"type": "config/category_registry/list", "scope": "automation"}}
+        optional = {4}  # categories are only needed for automations; an older Home Assistant may not have the command
         results: dict[int, Any] = {}
         try:
             async with asyncio.timeout(s.timeout * 3):
@@ -254,12 +261,15 @@ class HomeAssistant:
                         raise self._refused()
                     if reply.get("type") != "auth_ok":
                         raise RegistryUnavailable("Home Assistant's WebSocket did not accept the connection.")
-                    for i, kind in commands.items():
-                        await ws.send_json({"id": i, "type": kind})
+                    for i, payload in commands.items():
+                        await ws.send_json({"id": i, **payload})
                     while len(results) < len(commands):
                         msg = await ws.receive_json(timeout=s.timeout)
                         if isinstance(msg, dict) and msg.get("type") == "result" and msg.get("id") in commands:
                             if not msg.get("success") or not isinstance(msg.get("result"), list):
+                                if msg["id"] in optional:
+                                    results[msg["id"]] = []
+                                    continue
                                 raise RegistryUnavailable("Home Assistant would not list its areas and devices. The token's user may not be allowed.")
                             results[msg["id"]] = msg["result"]
         except HAError:
@@ -278,9 +288,14 @@ class HomeAssistant:
         areas = {a["area_id"]: str(a.get("name") or "") for a in results[1] if isinstance(a, dict) and isinstance(a.get("area_id"), str)}
         device_area = {d["id"]: d.get("area_id") for d in results[2] if isinstance(d, dict) and isinstance(d.get("id"), str)}
         entity_area: dict[str, str] = {}
+        entity_category: dict[str, str] = {}
         for e in results[3]:
             if isinstance(e, dict) and isinstance(e.get("entity_id"), str):
                 area = e.get("area_id") or device_area.get(e.get("device_id"))
                 if isinstance(area, str):
                     entity_area[e["entity_id"]] = area
-        return Registry(areas, entity_area)
+                cats = e.get("categories")
+                if isinstance(cats, dict) and isinstance(cats.get("automation"), str):
+                    entity_category[e["entity_id"]] = cats["automation"]
+        categories = {c["category_id"]: str(c.get("name") or "") for c in results[4] if isinstance(c, dict) and isinstance(c.get("category_id"), str)}
+        return Registry(areas, entity_area, categories, entity_category)

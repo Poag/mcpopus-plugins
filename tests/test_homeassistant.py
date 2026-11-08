@@ -39,14 +39,14 @@ def body(text: str) -> str:
     return m.group(1) if m else text
 
 
-READ_TOOLS = ["get_entity", "get_history", "get_logbook", "get_states", "list_areas", "list_services", "search_entities", "status"]
+READ_TOOLS = ["get_entity", "get_history", "get_logbook", "get_states", "list_areas", "list_automations", "list_services", "search_entities", "status"]
 DENIED = ["lock.front_door", "alarm_control_panel.house", "camera.driveway", "person.alex", "device_tracker.phone", "notify.mobile_app_alex", "sensor.secret_meter"]
 
 
 async def test_only_read_tools_are_served_by_default(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, values(ha), SECRETS) as (c, lp, _):
         assert sorted(t.name for t in (await c.list_tools()).tools) == READ_TOOLS
-        assert {m.name: m.tier for m in lp.declared if m.kind == "tool" and m.tier != "read"} == {"call_service": "write"}
+        assert {m.name: m.tier for m in lp.declared if m.kind == "tool" and m.tier != "read"} == {"call_service": "write", "trigger_automation": "write", "set_automation_enabled": "write"}
         assert {m.name for m in lp.declared if m.kind == "tool" and not m.untrusted} == {"status"}
         err, text = await call(c, "call_service", {"domain": "light", "service": "turn_on"})
         assert err and "Unknown tool" in text
@@ -56,7 +56,7 @@ async def test_status_reports_visible_set_only(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, values(ha, entity_denylist=["sensor.secret_*"]), SECRETS) as (c, _, _):
         err, text = await call(c, "status")
         assert not err and "Home Assistant 2026.11.1" in text and "access token works" in text
-        assert "Visible entities: 129" in text  # 136 minus lock, alarm, camera, person, tracker, notify and the secret meter
+        assert "Visible entities: 133" in text  # 140 minus lock, alarm, camera, person, tracker, notify and the secret meter
         assert "light 3" in text and "sensor " in text and "lock " not in text.split("By domain:")[1].split("\n")[0]
         assert "Area information: available" in text and "denied domains: alarm_control_panel, camera, device_tracker, lock, notify, person" in text
         assert "51.5074" not in text and "/config" not in text and "ha.example.com" not in text  # no location, paths or URLs from /api/config
@@ -210,7 +210,7 @@ async def test_read_only_sends_no_writes_and_never_the_template_endpoint(ha, tmp
             assert (await call(c, "get_history", bad))[0]
     assert ha.writes == [] and all(m == "GET" for m, _, _ in ha.requests)
     assert not any("template" in p or "error_log" in p or "camera_proxy" in p for _, p, _ in ha.requests)
-    assert set(ha.ws_commands) <= {"config/area_registry/list", "config/device_registry/list", "config/entity_registry/list"}
+    assert set(ha.ws_commands) <= {"config/area_registry/list", "config/device_registry/list", "config/entity_registry/list", "config/category_registry/list"}
 
 
 async def test_token_never_appears_in_output_logs_or_audit(ha, tmp_path, caplog):
