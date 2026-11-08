@@ -3,12 +3,22 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
-## 2026-11-09: homeassistant 0.3.0 (automations)
+## 2026-11-08: swarmui plan (design only)
+
+Alex asked for a plan for a SwarmUI plugin. Written as `docs/DESIGN-swarmui.md`; no code. Verified from the SwarmUI repository's own API
+and permission documentation: sessions and `swarm_token` accounts, per-route permission flags (so a least-privilege Swarm user is the main
+control), the blocking `GenerateText2Image` route and the WebSocket variant, the parameter and model listing routes, and the prompt tag
+syntax, which can load models, read server wildcard files and set any parameter (so prompt syntax is refused by default).
+Host findings: tool results are text only, so Claude cannot see generated images (smallest host change written down, not assumed);
+WebSocket progress would need `wsproto`, so version 1 is HTTP only with a background job. Unverified: everything against a real
+SwarmUI, the parameter ids of the release in use, LoRA handling, queue behaviour. Phases: read-only, then generation, then optional.
+
+## 2026-11-08: homeassistant 0.3.0 (automations)
 
 Alex asked to integrate with automations: list and inspect, trigger, enable and disable, read definitions, and create, edit or delete, with
 control limited to "those in a specified category". Built: the first three (the last two designed in section 9c, not built).
 
-### Verified (Home Assistant core source, `dev` branch, 9 November 2026)
+### Verified (Home Assistant core source, `dev` branch, 8 November 2026)
 
 - Automation services and their field defaults; `skip_condition` defaults to true (conditions skipped). The plugin always sends false.
 - Category registry list command and the `categories` field on entity-registry entries (read-only WebSocket, same as areas).

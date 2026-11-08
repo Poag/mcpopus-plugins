@@ -11,6 +11,7 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 | `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
 | `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled (write); list_automations (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
+| `swarmui` | planned | models, parameters, history (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | not built yet |
 
 ## homeassistant
 
