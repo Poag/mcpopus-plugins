@@ -1,14 +1,14 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.1.0, **read-only**. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.2.0. Reads, plus one write tool (`call_service`) that is off until the owner enables it and names what it may do. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
-(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: built and tested against a fake Home Assistant only. Nothing here has run against a real
-Home Assistant: the live check is in section 10.
+(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0) is built and tested against a fake
+Home Assistant only; its live check is section 10b.
 
 ## 1. Goal
 
 Let Claude read the state of Alex's home: which entities exist, what state they are in, which area they are in, what they did recently.
-A later phase adds a small, explicitly allowed set of changes (section 9). Policy about what Claude may see is enforced by the plugin,
+Version 0.2.0 adds a small, explicitly allowed set of changes (section 9). Policy about what Claude may see is enforced by the plugin,
 server side, and a hidden entity is indistinguishable from a missing one.
 
 ## 2. What was verified
@@ -119,7 +119,7 @@ allowlist (section 9).
 
 ## 6. Tools
 
-All are tier `read`. All return text that came from Home Assistant, so all except `status` are `untrusted=True` (the host wraps them
+All are tier `read` except `call_service` (tier `write`). All return text that came from Home Assistant, so all except `status` are `untrusted=True` (the host wraps them
 as data and caps their size).
 
 | Tool | Arguments | Returns |
@@ -131,10 +131,11 @@ as data and caps their size).
 | `get_history` | `entity_id`, `start`, `end`, `hours` | State changes, at most 200, window capped by `max_history_hours` |
 | `get_logbook` | `entity_id`, `start`, `end`, `hours` | Entries for that entity, at most 100, context removed |
 | `list_areas` | `area`, `limit`, `offset` | Areas with visible entity counts, or the visible entities in one area |
-| `list_services` | `domain` | The services in `allowed_services` with their descriptions. Empty by default. Nothing can call them in this version |
+| `list_services` | `domain` | The services in `allowed_services` with their descriptions, and the entities `call_service` may act on. Empty by default |
+| `call_service` | `domain`, `service`, `entity_id`, `data` | **Tier write.** One service on one named entity; returns its state before and after. Section 9 |
 
 Not built, on purpose: the template endpoint, a raw API pass-through, any call to an arbitrary URL, the camera proxy, the error log,
-event firing, state setting, WebSocket subscriptions.
+event firing, state setting, WebSocket subscriptions, group, area, device and "all" targets, and responses from services (`return_response`).
 
 ## 7. Configuration
 
@@ -147,7 +148,9 @@ event firing, state setting, WebSocket subscriptions.
 | `entity_allowlist` | empty | Globs. Empty means all entities not denied |
 | `entity_denylist` | empty | Globs. Always wins |
 | `domain_denylist` | the six domains above | Replacing the list removes the defaults |
-| `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Used by write tools in phase 2 |
+| `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Empty means no service may be called |
+| `write_entity_allowlist` | empty | Globs for the entities `call_service` may act on. Separate from what can be read: an entity must also be visible. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
+| `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
 | `max_results` | 50 | 1 to 500 |
 | `max_history_hours` | 72 | 1 to 720 |
 | `redact_attributes` | the list in section 5 | Case-insensitive |
@@ -174,19 +177,43 @@ Every message names a setting or says what to check; none contains the URL, the 
 | Areas unavailable | `Area and device data need the wsproto library, which this host does not have ...` (or the WebSocket variants) |
 | Window too long | `That window is longer than this connector allows (72 hours, the max_history_hours setting).` |
 
-## 9. Writes (phase 2, not built)
+## 9. Writes (`call_service`, 0.2.0)
 
-Planned, to be built only after Alex confirms the read-only checklist and names the services and entities:
+Three independent switches must all be on before anything can change, and each refusal happens before anything is sent to Home Assistant:
 
-- One tool, `call_service`, tier `write`, off until ticked by name in the host policy. It calls only `domain.service` pairs listed in
-  `allowed_services`, on entities the entity policy allows. A service that is not listed is refused with the same message as an
-  unknown service.
-- The target is one named entity (`entity_id`, a string). The service data may not contain `entity_id`, `area_id`, `device_id`,
-  `label_id` or `floor_id`, so "all", area-wide and device-wide targets are impossible unless the allowlist says so explicitly.
-- It returns the entity's state before and after, and lists changed states only for entities the policy allows (Home Assistant returns
-  every state changed under the call's context, which can include hidden entities).
-- Its own rate limit (calls per minute), on top of the host's. `return_response` is not supported in the first write version.
-- Decisions needed from Alex first: which entities, which services, and whether `cover`, `climate` and `switch` may be written at all.
+1. The owner ticks `call_service` under Policy in the host's admin UI **and** turns read-only off (host policy, enforced by the host).
+2. The service is listed in `allowed_services` (exact `domain.service`; the domain must not be in `domain_denylist`).
+3. The entity matches `write_entity_allowlist` and is also visible under the read policy.
+
+Checks, in order, and what each returns (the first four are the same whatever the cause):
+
+| Check | Result |
+| --- | --- |
+| Service not allowed, in a denied domain, malformed, or not offered by Home Assistant | `No such service.` (one answer for all four) |
+| `entity_id` not one well-formed id (so no "all", list, comma list, wildcard or area) | error saying what an id looks like |
+| Entity domain differs from the service domain (so `homeassistant.turn_off` cannot reach another domain) | error |
+| Entity hidden by policy, or does not exist (checked against the visible states, before the write list) | `No such entity.` |
+| Entity visible and exists but not on the write list | `This connector may not change that entity ...` (the entity is visible anyway, so nothing hidden is revealed) |
+| `data` not an object, over 20 fields, over 2000 characters, bad field names, naming a target (`entity_id`, `area_id`, `device_id`, `label_id`, `floor_id`, `target`), or holding another entity's id | error |
+| More than `max_writes_per_minute` calls in the last minute | error naming the setting (only calls that reach Home Assistant count) |
+
+Then: it reads the entity's state, sends `POST /api/services/<domain>/<service>` with `{...data, "entity_id": <entity>}`, reads the state again,
+and returns both. States Home Assistant reports as changed under the call's context are listed only if the policy shows them (an
+automation may have moved a hidden lock). A timeout says the action may or may not have happened. Nothing is retried. The host's audit
+log records the call with argument names only; the plugin also counts `service_calls` in the host statistics.
+
+Writes and prompt injection: this plugin reads text from Home Assistant (names, attributes, logbook) that people and devices set, and
+also has a write tool, which the plugin rules say to avoid where possible. The brief asked for both in one plugin, so the controls are:
+a narrow write list, exact service pairs, one entity per call, before and after state, a rate limit, and the host's per-tool tick. Also
+set `call_service` to **Needs approval** in claude.ai's connector tool permissions, so a human confirms each call.
+
+Decisions taken (6 and 7 November 2026): Alex allowed `light.turn_on`, `light.turn_off`, `switch.turn_on`, `switch.turn_off`,
+`cover.open_cover`, `cover.close_cover`, `climate.set_temperature`, and chose `light.*` as the only entities to act on. So the cover,
+switch and climate services are allowed but have no allowed target: nothing but lights can change. Adding a switch, cover or climate
+entity to `write_entity_allowlist` is a separate decision, and a garage door in particular is a physical-security action.
+
+Not supported: `return_response` services, group, area, device or label targets, services in another domain than the entity's, scripts,
+scenes and automations (their domains are not on the allowlist, and an allowlisted pair must match the entity's domain).
 
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
@@ -215,6 +242,25 @@ Save and reload, tick the read tools under Policy, add `https://<host>/homeassis
 8. Revoke the token in Home Assistant and run status again. Expect the refused-token message, then a pause message on the next call.
 
 If areas are unavailable, that is the missing `wsproto` library (section 2); everything else must still work.
+
+## 10b. Acceptance checklist for `call_service` (Alex, against the real Home Assistant)
+
+In the plugin settings enter: `allowed_services` = the seven pairs in section 9 (one per line); `write_entity_allowlist` = `light.*`;
+leave `max_writes_per_minute` at 10. Save and reload. Under Policy, turn read-only off and tick `call_service`. In claude.ai, open the
+connector's tool permissions and set Call service to Needs approval. Update the plugin first (Fetch, Apply update) so it runs 0.2.0. Then:
+
+1. Ask Claude to run `list_services`. Expect the seven services, `light.*` as the only target, and the cover and climate services marked
+   "not offered" if you have none.
+2. Ask: "Turn on light.inside_porch with call_service." Approve it. Expect before and after states and the light to change.
+3. Ask Claude to turn it off again.
+4. Ask it to set brightness 50 on the same light, with `data` {"brightness": 128}. Expect the new brightness in the after state.
+5. Ask it to call `light.toggle` (not allowed) and `lock.unlock` on a lock. Expect `No such service.` for both and no change.
+6. Ask it to turn on a **switch** that exists. Expect "may not change that entity". Ask it to turn on `person.vicki`. Expect "No such entity."
+7. Ask it to turn on "all lights", then give `entity_id` "light.*". Expect refusals.
+8. Ask it to turn on a light but add `area_id` to the data. Expect a refusal.
+9. Ask for 12 calls in a minute (for example repeated on and off). Expect the rate-limit message after 10.
+10. In Home Assistant check the logbook: only the changes you approved, made by the connector's user.
+11. In the host's Policy page untick `call_service`, reload, and ask again. Expect Claude to say it has no such tool.
 
 ## 11. Live check results
 

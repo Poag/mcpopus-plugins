@@ -3,6 +3,34 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-08: homeassistant 0.2.0 (call_service)
+
+### Decisions
+
+- Alex allowed seven services (light, switch, cover on/off or open/close, climate set_temperature) but only `light.*` as targets. A separate
+  `write_entity_allowlist` (default empty) expresses that; the service list alone would have allowed cover and climate targets.
+- Writes need three independent switches (host tick, service pair, entity pattern) and every refusal happens before a request is sent.
+- A hidden entity and a missing one give the same answer even when the write list is involved: existence is checked against the visible
+  states before the write list, so "not on the write list" is only ever said about an entity that is visible anyway.
+- Targets cannot be widened: one `entity_id` string, target keys and foreign entity ids rejected in `data`, entity domain must equal the
+  service domain.
+- Changed states returned by Home Assistant are filtered by the read policy before being shown.
+- The write tool is in the same plugin as the untrusted-content readers, as the brief specified; mitigations and the recommendation to
+  set Needs approval are in the design, section 9.
+
+### Verified
+
+- Source of the REST service-call view (read on 6 November): `POST /api/services/<domain>/<service>`, JSON body is the service data,
+  400 for validation or unknown service, 500 for Home Assistant errors, the reply lists changed states under the call's context.
+- Eleven new tests (fake Home Assistant, real host manager and client) including a zero-write assertion at the fake when the tool is off.
+  Mutation checks: ignoring the write list, the service allowlist, the target-key rule, the rate limit, the changed-state filter or the
+  domain rule each makes at least one test fail.
+
+### Unverified
+
+Everything against the real Home Assistant (section 10b is the live check); the behaviour of slow devices whose state updates after the
+call returns (the output tells the model to confirm with `get_entity`); services whose fields reference other entities by name.
+
 ## 2026-11-07: homeassistant 0.1.0, first live check
 
 Ran the 18-step prompt against the real Home Assistant: no failures; area steps skipped (no `wsproto` in the host image). Details and gaps in
