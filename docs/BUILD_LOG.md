@@ -3,6 +3,12 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-07: homeassistant 0.1.0, first live check
+
+Ran the 18-step prompt against the real Home Assistant: no failures; area steps skipped (no `wsproto` in the host image). Details and gaps in
+`docs/DESIGN-homeassistant.md` section 11. Lesson: a test prompt with unfilled placeholders produces a "pass" for the steps that need none and
+silently stops on the rest, so the report said "not run" and had to be repeated with real values.
+
 ## 2026-11-06: homeassistant 0.1.0 (read-only)
 
 ### Verified

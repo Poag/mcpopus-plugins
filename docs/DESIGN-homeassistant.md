@@ -215,3 +215,23 @@ Save and reload, tick the read tools under Policy, add `https://<host>/homeassis
 8. Revoke the token in Home Assistant and run status again. Expect the refused-token message, then a pause message on the next call.
 
 If areas are unavailable, that is the missing `wsproto` library (section 2); everything else must still work.
+
+## 11. Live check results
+
+7 November 2026, plugin 0.1.0 on Alex's host against his real Home Assistant, through a claude.ai connector, by the 18-step prompt.
+No step failed. Verified live: status (version, token works, domain list without the denied domains, no count of hidden items); paged
+search; device-class filter (a dew point sensor counts as `temperature`, which is Home Assistant's own device class); `get_entity` with
+redaction (no location, token or picture values); `get_states` with a missing entity; history over 6 hours (nine changes) and the
+`max_history_hours` refusal; a clear error for a bad date; `person.vicki` (hidden by the `person` domain rule) answering exactly like a
+missing entity in `get_entity`, `get_states`, `get_history` and `get_logbook`; no match for its name in search; clear errors for malformed
+ids; no tool that can change anything.
+
+Not covered by this run:
+
+- **Areas** (steps 4, 12 second half, 14): skipped, because the host image has no `wsproto` (section 2). Expected.
+- **The entity pattern rule** live: the hidden entity was hidden by domain; `entity_denylist` and `entity_allowlist` were not exercised against the real system.
+- **The logbook filters** live: the one logbook query returned no entries, so the `context_*` stripping and hidden-reference dropping have only been seen against the fake.
+- **Step 16's exact boundary** (101 characters): the client did not count its input; covered by the automated test.
+- **Revoked-token behaviour** (the optional check), and the 3 other items under section 3 (released-version differences, recorder off, reverse proxy).
+- **DENIED and LOCKED were the same entity**, so only the `person` domain was tested live.
+
