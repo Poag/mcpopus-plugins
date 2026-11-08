@@ -272,15 +272,16 @@ class HomeAssistant:
                                     continue
                                 raise RegistryUnavailable("Home Assistant would not list its areas and devices. The token's user may not be allowed.")
                             results[msg["id"]] = msg["result"]
-        except HAError:
-            raise
-        except ImportError:
-            raise RegistryUnavailable("Area and device data need the wsproto library, which this host does not have (see the plugin's design doc). Everything else works.") from None
-        except (TimeoutError, asyncio.CancelledError) as e:
-            if isinstance(e, asyncio.CancelledError):
-                raise
-            raise RegistryUnavailable("Home Assistant did not answer the area and device request in time.") from None
-        except Exception as e:  # noqa: BLE001 - the WebSocket client has its own exception family; log the class only
+        except Exception as e0:  # noqa: BLE001 - the WebSocket client raises groups of exceptions; classify the first real one
+            e: BaseException = e0
+            while isinstance(e, BaseExceptionGroup) and e.exceptions:
+                e = e.exceptions[0]
+            if isinstance(e, HAError):
+                raise e from None
+            if isinstance(e, ImportError):
+                raise RegistryUnavailable("Area and device data need the wsproto library, which this host does not have (see the plugin's design doc). Everything else works.") from None
+            if isinstance(e, TimeoutError):
+                raise RegistryUnavailable("Home Assistant did not answer the area and device request in time.") from None
             self._log.warning("home assistant registry read failed: %s", type(e).__name__)
             if _cause_is_tls(e):
                 raise RegistryUnavailable("Home Assistant's certificate was not accepted for the WebSocket. Check ca_certificate.") from None

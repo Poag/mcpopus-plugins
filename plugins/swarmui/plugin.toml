@@ -1,0 +1,4 @@
+name = "swarmui"
+version = "0.1.0"
+description = "Generate images with a SwarmUI (Stable Diffusion) instance and look at its models, parameters and history. Generation is off until the owner enables it; prompts, models and sizes are limited by the plugin."
+min_host_version = "0.1.0"
