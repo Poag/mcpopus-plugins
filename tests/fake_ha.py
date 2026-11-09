@@ -16,7 +16,6 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 TOKEN = "ha-long-lived-token-SECRET-0123456789"
-ADMIN_TOKEN = "ha-ADMIN-token-SECRET-9876543210"
 
 
 def st(eid, state, **attrs):
@@ -71,8 +70,8 @@ def build_home() -> dict:
 class FakeHA:
     def __init__(self, token: str = TOKEN) -> None:
         self.token = token
-        self.admin_token = ADMIN_TOKEN
-        self.auth_log: list[tuple[str, str]] = []  # (path, which token the request carried: user, admin, none or bad)
+        self.token_is_admin = True  # whether the token's Home Assistant user is an administrator (the config API needs one)
+        self.auth_log: list[tuple[str, str]] = []  # (path, which token the request carried: user, none or bad)
         self.config_calls: list[tuple[str, str]] = []  # (method, config id) of every call to the automation config API
         self.saved: list[dict] = []
         self.config_status: int | None = None  # make only config API writes fail
@@ -137,13 +136,13 @@ class FakeHA:
     async def _gate(self, request: Request, admin: bool = False):
         self.requests.append((request.method, request.url.path, dict(request.query_params)))
         header = request.headers.get("authorization")
-        kind = "user" if header == f"Bearer {self.token}" else "admin" if header == f"Bearer {self.admin_token}" else "none" if header is None else "bad"
+        kind = "user" if header == f"Bearer {self.token}" else "none" if header is None else "bad"
         self.auth_log.append((request.url.path, kind))
         if request.method != "GET":
             self.writes.append(f"{request.method} {request.url.path}")
         if self.delay:
             await asyncio.sleep(self.delay)
-        if kind != ("admin" if admin else "user"):  # the config API wants an administrator; everything else must never see the admin token
+        if kind != "user" or (admin and not self.token_is_admin):  # the config API is administrator-only: a non-administrator gets 401, as in Home Assistant
             self.auth_failures += 1
             return JSONResponse({"message": "401: Unauthorized"}, status_code=401)
         if self.status_override:

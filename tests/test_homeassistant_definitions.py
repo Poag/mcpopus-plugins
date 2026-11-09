@@ -7,11 +7,10 @@ import pytest
 from mcpopus.pluginconfig import Policy
 
 from conftest import plugin_module, running_plugin
-from fake_ha import ADMIN_TOKEN, TOKEN
+from fake_ha import TOKEN
 from test_homeassistant import HOME, SECRETS, body, call, ha, values  # noqa: F401  (ha is a fixture)
 
 ALL = Policy(read_only=False, enable_tools=["save_automation", "delete_automation", "call_service"])
-ADMIN = {"token": TOKEN, "admin_token": ADMIN_TOKEN}
 GOOD = {"automation_id": "claude_porch", "alias": "Porch when door opens", "triggers": [{"type": "state", "entity_id": "binary_sensor.door_contact", "to": "on"}],
         "actions": [{"service": "light.turn_on", "entity_id": "light.kitchen", "data": {"brightness": 120}}, {"delay": "00:00:10"}, {"service": "light.turn_off", "entity_id": "light.kitchen"}]}
 
@@ -25,43 +24,43 @@ async def save(c, **kw):
 
 
 async def test_tiers_and_default_off(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN) as (c, lp, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS) as (c, lp, _):
         names = [t.name for t in (await c.list_tools()).tools]
         assert "get_automation_definition" in names and "save_automation" not in names and "delete_automation" not in names
         assert (await save(c))[0] and (await call(c, "delete_automation", {"automation_id": "claude_porch"}))[0]
-    async with running_plugin(tmp_path / "b", HOME, dcfg(ha), ADMIN, policy=Policy(read_only=False, enable_tools=["save_automation"])) as (c, _, _):
+    async with running_plugin(tmp_path / "b", HOME, dcfg(ha), SECRETS, policy=Policy(read_only=False, enable_tools=["save_automation"])) as (c, _, _):
         assert (await call(c, "delete_automation", {"automation_id": "claude_porch"}))[0]  # each tool is enabled by its own name
     assert ha.saved == [] and not any(m != "GET" for m, _ in ha.config_calls)
 
 
-async def test_without_the_admin_token_nothing_touches_the_config_api(ha, tmp_path):
+async def test_a_token_whose_user_is_not_an_administrator_only_loses_the_definition_tools(ha, tmp_path):
+    ha.token_is_admin = False
     async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
-        for tool, args in (("save_automation", GOOD), ("delete_automation", {"automation_id": "claude_porch"})):
+        err, t = await save(c)
+        assert err and "automation config call" in t and "administrator" in t and "Everything else still works" in t and TOKEN not in t
+        first = ha.auth_failures
+        for tool, args in (("save_automation", GOOD), ("delete_automation", {"automation_id": "claude_porch"}), ("get_automation_definition", {"entity_id": "automation.porch_evening"})):
             err, t = await call(c, tool, args)
-            assert err and "admin_token setting" in t
-        err, t = await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"})
-        assert err and "admin_token setting" in t
-        _, t = await call(c, "status")
-        assert "no admin_token" in t
-    assert ha.config_calls == [] and all(k in ("user", "none") for _, k in ha.auth_log)
+            assert err and "paused" in t, tool
+        assert ha.auth_failures == first == 1  # one refusal, then no more attempts while paused (Home Assistant can ban repeated failures)
+        # everything else is unaffected, including the ordinary calls and the other write tools
+        assert "access token works" in (await call(c, "status"))[1]
+        assert "light.kitchen" in (await call(c, "search_entities", {"query": "kitchen"}))[1]
+        assert not (await call(c, "call_service", {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}))[0]
+    assert ha.saved == [] and all(m == "GET" or cid == "claude_porch" for m, cid in ha.config_calls)
 
 
-async def test_each_token_is_only_used_where_it_belongs(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
-        await call(c, "status")
-        await call(c, "list_automations")
-        assert not (await save(c))[0]
-        await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"})
-        await call(c, "delete_automation", {"automation_id": "claude_porch"})
-    config_paths = [k for p, k in ha.auth_log if p.startswith("/api/config/automation/")]
-    other = [k for p, k in ha.auth_log if not p.startswith("/api/config/automation/")]
-    assert config_paths and set(config_paths) == {"admin"}  # the administrator token is only ever sent to the config API
-    assert other and set(other) == {"user"}  # and the ordinary token never goes there
-    assert ha.auth_failures == 0
+async def test_the_one_token_is_sent_everywhere_and_never_in_output(ha, tmp_path, caplog):
+    caplog.set_level(logging.DEBUG)
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
+        outs = [(await call(c, "status"))[1], (await save(c))[1], (await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"}))[1],
+                (await call(c, "delete_automation", {"automation_id": "claude_porch"}))[1]]
+    assert ha.config_calls and {k for _, k in ha.auth_log} == {"user"} and ha.auth_failures == 0
+    assert TOKEN not in "\n".join(outs) and TOKEN not in caplog.text and TOKEN not in (tmp_path / "audit.jsonl").read_text()
 
 
 async def test_save_creates_a_disabled_automation_in_home_assistants_format(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         err, t = await save(c, description="Opens the porch light", conditions=[{"type": "time", "after": "18:00", "weekday": ["mon", "fri"]}])
         text = body(t)
         assert not err and "Created automation claude_porch (Porch when door opens)." in text and "entity: automation.porch_when_door_opens" in text
@@ -76,7 +75,7 @@ async def test_save_creates_a_disabled_automation_in_home_assistants_format(ha, 
 
 
 async def test_update_replaces_keeps_the_owners_initial_state_and_refuses_name_clashes(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         assert not (await save(c))[0]
         ha.automation_configs["claude_porch"]["initial_state"] = True  # the owner changed it in Home Assistant
         err, t = await save(c, alias="Porch renamed", actions=[{"service": "light.turn_on", "entity_id": "light.hall"}])
@@ -91,14 +90,14 @@ async def test_update_replaces_keeps_the_owners_initial_state_and_refuses_name_c
 
 
 async def test_only_prefixed_ids_can_be_written_or_deleted(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         for bad in ("1001", "porch_evening", "claude", "claude_", "claude_" + "x" * 41, "claude_a b", "claude_../x", "claude_a/b", "claude_a.b", "", "other_porch"):
             err, t = await save(c, automation_id=bad)
             assert err and "must start with claude_" in t, bad
             err, t = await call(c, "delete_automation", {"automation_id": bad})
             assert err and "must start with claude_" in t, bad
         assert "No such automation." in (await call(c, "delete_automation", {"automation_id": "claude_nope"}))[1]
-    async with running_plugin(tmp_path / "b", HOME, dcfg(ha, automation_id_prefix="bot_"), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path / "b", HOME, dcfg(ha, automation_id_prefix="bot_"), SECRETS, policy=ALL) as (c, _, _):
         assert (await save(c))[0]  # the configured prefix applies
         assert not (await save(c, automation_id="bot_ok"))[0]
     assert [m for m, _ in ha.config_calls if m != "GET"] == ["POST"] and ha.saved[0]["id"] == "bot_ok"
@@ -106,7 +105,7 @@ async def test_only_prefixed_ids_can_be_written_or_deleted(ha, tmp_path):
 
 
 async def test_delete_removes_only_the_named_prefixed_automation(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         assert not (await save(c))[0]
         err, t = await call(c, "delete_automation", {"automation_id": "claude_porch"})
         assert not err and "Deleted automation claude_porch" in t
@@ -138,7 +137,7 @@ async def test_the_subset_refuses_everything_else(ha, tmp_path):
         ({"alias": ""}, "alias is a short name"), ({"alias": "x" * 101}, "alias is a short name"), ({"alias": "{{ states('x') }}"}, "alias is a short name"), ({"description": "x" * 301}, "description is up to"),
         ({"mode": "parallel"}, "mode is single or restart"), ({"actions": [{"service": "light.turn_on", "entity_id": "light.kitchen"}] * 11}, "at most 10"),
     ]
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         for patch, expect in bad_cases:
             err, t = await save(c, **patch)
             assert err and expect in t, (patch, t[:200])
@@ -154,7 +153,7 @@ async def test_every_supported_shape_is_built_correctly(ha, tmp_path):
             "conditions": [{"type": "state", "entity_id": "switch.garage_fan", "state": ["on", "off"], "for": "00:00:10"}, {"type": "numeric_state", "entity_id": "sensor.kitchen_temperature", "below": 25},
                            {"type": "sun", "after": "sunrise", "before": "sunset", "after_offset": "00:15"}, {"type": "time", "before": "23:00"}],
             "actions": [{"service": "light.turn_on", "entity_id": "light.hall"}, {"delay": 30}]}
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         err, t = await call(c, "save_automation", spec)
         assert not err, t
     s = ha.saved[0]
@@ -165,7 +164,7 @@ async def test_every_supported_shape_is_built_correctly(ha, tmp_path):
 
 
 async def test_reading_definitions_hides_templates_hidden_things_and_missing_ones_alike(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha, entity_denylist=["automation.secret_*"]), ADMIN) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha, entity_denylist=["automation.secret_*"]), SECRETS) as (c, _, _):
         err, t = await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"})
         text = body(t)
         assert not err and "config id 1001" in text and '"trigger": "state"' in text and "binary_sensor.door_contact" in text and "light.kitchen" in text
@@ -181,26 +180,13 @@ async def test_reading_definitions_hides_templates_hidden_things_and_missing_one
 
 async def test_definition_output_is_bounded(ha, tmp_path):
     ha.automation_configs["1001"]["description"] = "d" * 20_000
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS) as (c, _, _):
         _, t = await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"})
         assert len(t) < 9000 and "[truncated]" in t
 
 
-async def test_admin_token_problems_are_clear_and_not_retried(ha, tmp_path):
-    ha.admin_token = "a-different-admin-token"
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
-        err, t = await save(c)
-        assert err and "refused the admin_token" in t and "administrator" in t and ADMIN_TOKEN not in t
-        n = ha.auth_failures
-        for _ in range(3):
-            err, t = await save(c)
-            assert err and "paused" in t
-        assert ha.auth_failures == n  # not retried while paused
-        assert "access token works" in (await call(c, "status"))[1]  # the ordinary token is unaffected
-
-
 async def test_home_assistant_rejection_is_explained_without_its_text(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, dcfg(ha), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha), SECRETS, policy=ALL) as (c, _, _):
         assert not (await save(c))[0]
         for status, expect in ((400, "rejected the automation as invalid"), (500, "reported an error while carrying out the call")):
             ha.config_status = status
@@ -213,11 +199,11 @@ async def test_home_assistant_rejection_is_explained_without_its_text(ha, tmp_pa
 
 async def test_secrets_never_appear_and_rate_limit_is_shared(ha, tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
-    async with running_plugin(tmp_path, HOME, dcfg(ha, max_writes_per_minute=3), ADMIN, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, dcfg(ha, max_writes_per_minute=3), SECRETS, policy=ALL) as (c, _, _):
         out = [(await save(c))[1], (await call(c, "get_automation_definition", {"entity_id": "automation.porch_evening"}))[1], (await call(c, "status"))[1]]
         out += [(await call(c, "call_service", {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}))[1], (await save(c))[1], (await save(c))[1]]
         assert "max_writes_per_minute" in out[-1]
-    for secret in (TOKEN, ADMIN_TOKEN):
+    for secret in (TOKEN,):
         assert secret not in "\n".join(out) and secret not in caplog.text and secret not in (tmp_path / "audit.jsonl").read_text()
     assert len(ha.saved) == 2 and len(ha.service_calls) == 1
 
@@ -225,9 +211,8 @@ async def test_secrets_never_appear_and_rate_limit_is_shared(ha, tmp_path, caplo
 async def test_config_rules(ha, tmp_path):
     from mcpopus.manager import PluginLoadError
 
-    for extra, secrets, field, leaked in (({}, {"token": TOKEN, "admin_token": TOKEN}, "admin_token", TOKEN), ({}, {"token": TOKEN, "admin_token": "two words"}, "admin_token", "two words"),
-                                          ({"automation_id_prefix": "Bad Prefix"}, ADMIN, "automation_id_prefix", "Bad Prefix"), ({"automation_id_prefix": ""}, ADMIN, "automation_id_prefix", None),
-                                          ({"automation_id_prefix": "x" * 21}, ADMIN, "automation_id_prefix", None)):
+    for extra, secrets, field, leaked in (({"automation_id_prefix": "Bad Prefix"}, SECRETS, "automation_id_prefix", "Bad Prefix"), ({"automation_id_prefix": ""}, SECRETS, "automation_id_prefix", None),
+                                          ({"automation_id_prefix": "x" * 21}, SECRETS, "automation_id_prefix", None)):
         with pytest.raises(PluginLoadError) as e:
             async with running_plugin(tmp_path / (field + str(len(str(extra)))), HOME, values(ha, **extra), secrets):
                 pass

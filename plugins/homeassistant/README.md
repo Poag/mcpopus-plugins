@@ -10,7 +10,7 @@ indistinguishable from a missing one.
 
 Automations can be listed, triggered (conditions respected), enabled and disabled when they are in a Home Assistant category the owner names.
 
-With an optional administrator token it can also read automation definitions and create, replace or delete automations whose id starts with a prefix (default `claude_`), within a strict subset and starting disabled.
+If the token's user is an administrator (use a dedicated one, marked local access only in Home Assistant) it can also read automation definitions and create, replace or delete automations whose id starts with a prefix (default `claude_`), within a strict subset and starting disabled.
 
 Everything it returns came from Home Assistant, so it is marked untrusted. Create the access token on a dedicated non-administrator
 Home Assistant user, and revoke it there to cut access. Area data needs the `wsproto` library in the host image; without it, everything

@@ -39,7 +39,6 @@ class Settings:
     token: str
     timeout: float
     max_response_bytes: int
-    admin_token: str = ""  # used only for the automation definition tools; empty means those tools are unavailable
 
 
 @dataclass
@@ -115,8 +114,9 @@ class HomeAssistant:
 
     def _admin_refused(self) -> HAError:
         self._admin_blocked_until = time.monotonic() + AUTH_PAUSE
-        return HAError("Home Assistant refused the admin_token. It must be a long-lived token of an administrator user (the automation config API is administrator-only). "
-                       f"Admin calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
+        return HAError("Home Assistant refused the automation config call. The automation definition tools need the token's user to be an administrator "
+                       "(Home Assistant's automation config API is administrator-only), or the token may have been revoked. Everything else still works. "
+                       f"These calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
 
     async def _get_json(self, path: str, params: dict[str, str] | None = None, *, missing_ok: bool = False) -> Any:
         return await self._request("GET", path, params, missing_ok=missing_ok)
@@ -125,14 +125,12 @@ class HomeAssistant:
                        admin: bool = False, bad_request: str = "") -> Any:
         write = method != "GET"
         s: Settings = self._get()
-        if admin:
-            if not s.admin_token:
-                raise HAError("This needs the admin_token setting: a long-lived token of an administrator user. See the plugin's design doc, section 9c.")
+        if admin:  # the config API: refused (and paused) separately, so a token whose user is not an administrator costs only these tools
             if time.monotonic() < self._admin_blocked_until:
                 raise self._admin_refused()
         else:
             self._blocked()
-        token = s.admin_token if admin else s.token
+        token = s.token
         try:
             async with self._http.stream(method, s.base_url + path, params=params, json=body, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}) as r:
                 status = r.status_code
