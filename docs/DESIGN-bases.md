@@ -78,6 +78,8 @@ was not reachable from the build machine; the help source repository was.
 | Link resolution for `.base` targets: a base that is blocked or missing is reported identically as `not found` | Resolution state must not reveal a blocked file |
 | Plugin version 0.4.0 | New tools |
 
+Confirmed by the owner on 9 November 2026: separate tools (not extending the note tools); a base over `max_base_bytes` is refused, not cut; `vault_status` keeps showing readable and not-readable base counts. Still open: the supported subset for `query_base`, whether `write_base` may overwrite by default, whether `.base` delete and move belong in the admin tier.
+
 ## 4. Tools (Phase 1)
 
 | Tool | Tier | Arguments | Returns |
