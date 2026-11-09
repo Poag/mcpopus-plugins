@@ -377,9 +377,8 @@ In Home Assistant create a dedicated **administrator** user for this (not your o
 
 Found during the first test of 0.4.0 (9 November 2026): the connector kept reporting "0 service(s) allowed" after the owner changed
 `allowed_services`. The host keeps the **old** plugin version running when a reload of the new settings fails, so a rejected setting looks
-like it was ignored. Check, in order: the plugin page shows no error after Save and reload; every list setting has **one entry per line**
-(a comma-separated line such as `light.turn_on, light.turn_off` is refused, naming the setting, because each entry must be exactly one
-`domain.service`); and `status` shows a recent "settings were loaded" time (added in 0.4.1). Write and admin tools such as
+like it was ignored. Check, in order: the plugin page shows no error after Save and reload; every list setting is valid (from 0.4.2 a pasted comma- or space-separated line is split into separate entries; before that it
+was refused, naming the setting, which is how this was found); and `status` shows a recent "settings were loaded" time (added in 0.4.1). Write and admin tools such as
 `delete_automation` are also only served after the owner turns read-only off and ticks each by name under Policy and saves the policy.
 
 ## 11. Live check results

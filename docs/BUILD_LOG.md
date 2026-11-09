@@ -3,6 +3,13 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-09: homeassistant 0.4.2 (comma-separated lists accepted)
+
+The owner's `allowed_services` screenshot showed the cause of the unapplied settings: seven services on ONE comma-separated line, refused by the
+validator, so the reload failed and the host kept the old settings. My own instructions had listed them with commas, which invited it.
+List settings (allowed_services, the entity lists, domain_denylist, redact_attributes) now split pasted commas, semicolons and spaces into
+entries. Category names are not split (they may contain spaces). A wildcard in a service is still refused. Test added.
+
 ## 2026-11-09: homeassistant 0.4.1 (status shows plugin version and settings load time)
 
 First live test of 0.4.0: all refusals worked, but the owner's new `allowed_services` and `write_entity_allowlist` never reached the connector
