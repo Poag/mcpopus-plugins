@@ -333,10 +333,10 @@ async def test_invalid_config_names_fields_never_values(ha, tmp_path):
         ({"base_url": "ftp://ha.local"}, SECRETS, "base_url", "ftp://"),
         ({}, {"token": "two words"}, "token", "two words"),
         ({}, {"token": "   "}, "token", None),
-        ({"entity_denylist": ["bad pattern!"]}, SECRETS, "entity_denylist", "bad pattern!"),
+        ({"entity_denylist": ["bad/pattern!"]}, SECRETS, "entity_denylist", "bad/pattern!"),
         ({"allowed_services": ["light.*"]}, SECRETS, "allowed_services", "light.*"),
         ({"allowed_services": ["lock.unlock"]}, SECRETS, "allowed_services", None),
-        ({"domain_denylist": ["Lock Domain"]}, SECRETS, "domain_denylist", "Lock Domain"),
+        ({"domain_denylist": ["Lock/Domain"]}, SECRETS, "domain_denylist", "Lock/Domain"),
         ({"ca_certificate": "not a certificate"}, SECRETS, "ca_certificate", "not a certificate"),
         ({"max_results": 0}, SECRETS, "max_results", None),
     ]

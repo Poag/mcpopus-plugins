@@ -29,6 +29,16 @@ LOGBOOK_ENTRIES = 100
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 
+def _items(v):
+    """List settings are one entry per line, but a pasted comma- or space-separated line works too (each entry has no spaces or commas)."""
+    if not isinstance(v, list):
+        return v
+    out: list = []
+    for x in v:
+        out += [p for p in re.split(r"[,;\s]+", x) if p] if isinstance(x, str) else [x]
+    return out
+
+
 class Config(BaseModel):
     base_url: str = Field(description="Home Assistant address, for example http://homeassistant.local:8123 or https://ha.example.com (no path, no credentials)")
     token: SecretStr = Field(description="A long-lived access token. Create it on a dedicated Home Assistant user's profile page, and revoke it there to cut access. The automation definition tools only work if that user is an administrator; without them a non-administrator is safer")
@@ -88,11 +98,13 @@ class Config(BaseModel):
     @field_validator("entity_allowlist", "entity_denylist", "write_entity_allowlist", mode="before")
     @classmethod
     def _globs(cls, v):
+        v = _items(v)
         return [norm_glob(x) for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else v
 
     @field_validator("domain_denylist", mode="before")
     @classmethod
     def _domains(cls, v):
+        v = _items(v)
         if not isinstance(v, list):
             return v
         out = [x.strip().lower() for x in v if isinstance(x, str) and x.strip()]
@@ -103,11 +115,12 @@ class Config(BaseModel):
     @field_validator("allowed_services", mode="before")
     @classmethod
     def _services(cls, v):
+        v = _items(v)
         if not isinstance(v, list):
             return v
         out = [x.strip().lower() for x in v if isinstance(x, str) and x.strip()]
         if any(not SERVICE_RE.fullmatch(s) for s in out):
-            raise ValueError("entries must look like light.turn_on (domain.service, no wildcards)")
+            raise ValueError("entries must look like light.turn_on (one domain.service each, no wildcards; separate entries with new lines or commas)")
         return out
 
     @field_validator("automation_categories", mode="before")
@@ -123,6 +136,7 @@ class Config(BaseModel):
     @field_validator("redact_attributes", mode="before")
     @classmethod
     def _redact(cls, v):
+        v = _items(v)
         return [x.strip().casefold()[:60] for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else v
 
     @model_validator(mode="after")

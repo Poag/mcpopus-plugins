@@ -167,9 +167,20 @@ async def test_list_services_and_status_describe_the_write_setup(ha, tmp_path):
 async def test_write_config_is_validated(ha, tmp_path):
     from mcpopus.manager import PluginLoadError
 
-    for extra, field in (({"allowed_services": ["light.turn_on, light.turn_off"]}, "allowed_services"), ({"write_entity_allowlist": ["lock.*"]}, "write_entity_allowlist"), ({"write_entity_allowlist": ["Bad Pattern"]}, "write_entity_allowlist"),
+    for extra, field in (({"allowed_services": ["light.*"]}, "allowed_services"), ({"write_entity_allowlist": ["lock.*"]}, "write_entity_allowlist"), ({"write_entity_allowlist": ["Bad/Pattern"]}, "write_entity_allowlist"),
                          ({"max_writes_per_minute": 0}, "max_writes_per_minute"), ({"max_writes_per_minute": 1000}, "max_writes_per_minute")):
         with pytest.raises(PluginLoadError) as e:
             async with running_plugin(tmp_path / field / str(len(str(extra))), HOME, values(ha, **extra), SECRETS):
                 pass
-        assert field in str(e.value) and "Bad Pattern" not in str(e.value)
+        assert field in str(e.value) and "Bad/Pattern" not in str(e.value)
+
+
+async def test_pasted_comma_or_space_separated_lists_are_accepted(ha, tmp_path):
+    cfg = values(ha, allowed_services=["light.turn_on, light.turn_off  switch.turn_on;cover.open_cover", "climate.set_temperature"], write_entity_allowlist=["light.*, switch.*"],
+                 entity_denylist=["sensor.secret_*,sensor.other_*"], domain_denylist=["lock, camera"], redact_attributes=["Latitude, Longitude"])
+    async with running_plugin(tmp_path, HOME, cfg, SECRETS, policy=ENABLED) as (c, _, _):
+        _, t = await call(c, "status")
+        assert "5 service(s) allowed; 2 entity pattern(s)" in t and "2 deny pattern(s)" in t and "denied domains: camera, lock" in t
+        err, t = await svc(c, entity_id="light.kitchen")
+        assert not err  # the pasted line really works
+        assert (await svc(c, domain="light", service="toggle"))[0]
