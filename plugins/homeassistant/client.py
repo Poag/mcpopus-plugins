@@ -39,6 +39,7 @@ class Settings:
     token: str
     timeout: float
     max_response_bytes: int
+    admin_token: str = ""  # used only for the automation definition tools; empty means those tools are unavailable
 
 
 @dataclass
@@ -92,6 +93,7 @@ class HomeAssistant:
         self._get = get_settings  # called per operation, so the token is read at the moment of use
         self._log = logger
         self._blocked_until = 0.0
+        self._admin_blocked_until = 0.0
         self._states: tuple[float, list[dict[str, Any]]] | None = None
         self._registry: tuple[float, Registry] | None = None
         self._registry_failed: tuple[float, RegistryUnavailable] | None = None
@@ -111,17 +113,32 @@ class HomeAssistant:
         self._blocked_until = time.monotonic() + AUTH_PAUSE
         return HAError("Home Assistant refused the access token. Check the token setting (it may have been revoked or mistyped).")
 
+    def _admin_refused(self) -> HAError:
+        self._admin_blocked_until = time.monotonic() + AUTH_PAUSE
+        return HAError("Home Assistant refused the admin_token. It must be a long-lived token of an administrator user (the automation config API is administrator-only). "
+                       f"Admin calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
+
     async def _get_json(self, path: str, params: dict[str, str] | None = None, *, missing_ok: bool = False) -> Any:
         return await self._request("GET", path, params, missing_ok=missing_ok)
 
-    async def _request(self, method: str, path: str, params: dict[str, str] | None = None, *, body: Any = None, missing_ok: bool = False) -> Any:
+    async def _request(self, method: str, path: str, params: dict[str, str] | None = None, *, body: Any = None, missing_ok: bool = False,
+                       admin: bool = False, bad_request: str = "") -> Any:
         write = method != "GET"
-        self._blocked()
         s: Settings = self._get()
+        if admin:
+            if not s.admin_token:
+                raise HAError("This needs the admin_token setting: a long-lived token of an administrator user. See the plugin's design doc, section 9c.")
+            if time.monotonic() < self._admin_blocked_until:
+                raise self._admin_refused()
+        else:
+            self._blocked()
+        token = s.admin_token if admin else s.token
         try:
-            async with self._http.stream(method, s.base_url + path, params=params, json=body, headers={"Authorization": f"Bearer {s.token}", "Accept": "application/json"}) as r:
+            async with self._http.stream(method, s.base_url + path, params=params, json=body, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}) as r:
                 status = r.status_code
                 if status in (401, 403):
+                    if admin:
+                        raise self._admin_refused()
                     raise self._refused() if status == 401 else HAError("Home Assistant refused permission for this request. The token's user may not be allowed to read it.")
                 if status == 404 and missing_ok:
                     return None
@@ -129,6 +146,8 @@ class HomeAssistant:
                     raise HAError("Home Assistant redirected the request. Check the base_url setting (for example http versus https, or a missing port).")
                 if status == 404:
                     raise HAError("Home Assistant does not have that endpoint. Check the base_url setting and that the api (or frontend) integration is enabled.")
+                if status == 400 and bad_request:
+                    raise HAError(bad_request)
                 if status == 400 and write:
                     raise HAError("Home Assistant rejected the call. Check that the service accepts that entity and that the data fields are right for it.")
                 if status >= 500 and write:
@@ -204,6 +223,21 @@ class HomeAssistant:
         data = await self._request("POST", f"/api/services/{quote(domain, safe='')}/{quote(service, safe='')}", body=body)
         self._states = None  # the cached entity list is now stale
         return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+
+    async def automation_config(self, config_id: str) -> dict[str, Any] | None:
+        """The stored config of one automation (administrator-only in Home Assistant), or None when there is none."""
+        data = await self._request("GET", f"/api/config/automation/config/{quote(config_id, safe='')}", missing_ok=True, admin=True)
+        return data if isinstance(data, dict) else None
+
+    async def save_automation_config(self, config_id: str, config: dict[str, Any]) -> None:
+        await self._request("POST", f"/api/config/automation/config/{quote(config_id, safe='')}", body=config, admin=True,
+                            bad_request="Home Assistant rejected the automation as invalid. Check its triggers, conditions and actions.")
+        self._states = None
+
+    async def delete_automation_config(self, config_id: str) -> None:
+        await self._request("DELETE", f"/api/config/automation/config/{quote(config_id, safe='')}", admin=True,
+                            bad_request="Home Assistant could not remove that automation (it may no longer exist).")
+        self._states = None
 
     async def services(self) -> dict[str, dict[str, Any]]:
         """domain -> service -> description. Tolerates both documented shapes (a list of names, or a mapping)."""

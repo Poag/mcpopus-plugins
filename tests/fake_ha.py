@@ -16,6 +16,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 TOKEN = "ha-long-lived-token-SECRET-0123456789"
+ADMIN_TOKEN = "ha-ADMIN-token-SECRET-9876543210"
 
 
 def st(eid, state, **attrs):
@@ -70,6 +71,17 @@ def build_home() -> dict:
 class FakeHA:
     def __init__(self, token: str = TOKEN) -> None:
         self.token = token
+        self.admin_token = ADMIN_TOKEN
+        self.auth_log: list[tuple[str, str]] = []  # (path, which token the request carried: user, admin, none or bad)
+        self.config_calls: list[tuple[str, str]] = []  # (method, config id) of every call to the automation config API
+        self.saved: list[dict] = []
+        self.config_status: int | None = None  # make only config API writes fail
+        self.automation_configs: dict[str, dict] = {
+            "1001": {"id": "1001", "alias": "Porch Evening", "triggers": [{"trigger": "state", "entity_id": "binary_sensor.door_contact", "to": "on"}], "actions": [{"action": "light.turn_on", "target": {"entity_id": "light.kitchen"}}]},
+            "1002": {"id": "1002", "alias": "Garage Night", "triggers": [{"trigger": "time", "at": "22:00:00"}], "actions": [{"action": "switch.turn_off", "data": {"x": "{{ states('sensor.kitchen_temperature') }}"}}]},
+            "1003": {"id": "1003", "alias": "Lock Up", "triggers": [{"trigger": "time", "at": "23:00:00"}], "actions": [{"action": "lock.lock", "target": {"entity_id": "lock.front_door"}}]},
+            "1004": {"id": "1004", "alias": "Secret Routine", "triggers": [{"trigger": "time", "at": "07:00:00"}], "actions": [{"action": "light.turn_on", "target": {"entity_id": "light.bedroom"}}]},
+        }
         home = build_home()
         self.states = {s["entity_id"]: s for s in home["states"]}
         self.reg_entities, self.areas, self.devices = home["entities"], home["areas"], home["devices"]
@@ -118,16 +130,20 @@ class FakeHA:
             Route("/api/logbook", self._log), Route("/api/logbook/{ts:path}", self._log),
             Route("/api/services", self._services), Route("/api/services/{d}/{s}", self._call, methods=["POST"]),
             Route("/api/template", self._template, methods=["POST"]), Route("/api/events/{e}", self._event, methods=["POST"]),
+            Route("/api/config/automation/config/{cid}", self._autocfg, methods=["GET", "POST", "DELETE"]),
             Route("/api/error_log", self._errlog), WebSocketRoute("/api/websocket", self._ws)])
 
     # ------------------------------------------------------------------ REST
-    async def _gate(self, request: Request):
+    async def _gate(self, request: Request, admin: bool = False):
         self.requests.append((request.method, request.url.path, dict(request.query_params)))
+        header = request.headers.get("authorization")
+        kind = "user" if header == f"Bearer {self.token}" else "admin" if header == f"Bearer {self.admin_token}" else "none" if header is None else "bad"
+        self.auth_log.append((request.url.path, kind))
         if request.method != "GET":
             self.writes.append(f"{request.method} {request.url.path}")
         if self.delay:
             await asyncio.sleep(self.delay)
-        if request.headers.get("authorization") != f"Bearer {self.token}":
+        if kind != ("admin" if admin else "user"):  # the config API wants an administrator; everything else must never see the admin token
             self.auth_failures += 1
             return JSONResponse({"message": "401: Unauthorized"}, status_code=401)
         if self.status_override:
@@ -200,6 +216,33 @@ class FakeHA:
 
     async def _event(self, r):
         return await self._gate(r) or JSONResponse({"message": "fired"})
+
+    async def _autocfg(self, r):
+        if (g := await self._gate(r, admin=True)) is not None:
+            return g
+        cid = r.path_params["cid"]
+        self.config_calls.append((r.method, cid))
+        if self.config_status and r.method != "GET":
+            return PlainTextResponse("Message malformed: secret detail /config/automations.yaml", status_code=self.config_status)
+        if r.method == "GET":
+            c = self.automation_configs.get(cid)
+            return JSONResponse(c) if c else JSONResponse({"message": "Resource not found"}, status_code=404)
+        if r.method == "DELETE":
+            if cid not in self.automation_configs:
+                return JSONResponse({"message": "Resource not found"}, status_code=400)
+            del self.automation_configs[cid]
+            for e in [e for e, st in self.states.items() if e.startswith("automation.") and st["attributes"].get("id") == cid]:
+                del self.states[e]
+            return JSONResponse({"result": "ok"})
+        body = await r.json()
+        if not isinstance(body, dict) or not body.get("triggers") or not body.get("actions"):
+            return JSONResponse({"message": "Message malformed: required key not provided"}, status_code=400)
+        self.automation_configs[cid] = body
+        self.saved.append(body)
+        existing = [e for e, st in self.states.items() if e.startswith("automation.") and st["attributes"].get("id") == cid]
+        eid = existing[0] if existing else "automation." + "".join(ch if ch.isalnum() else "_" for ch in body.get("alias", cid).lower())
+        self.states[eid] = st(eid, "off" if body.get("initial_state") is False else "on", friendly_name=body.get("alias", cid), id=cid, last_triggered=None, mode=body.get("mode", "single"), current=0)
+        return JSONResponse({"result": "ok"})
 
     async def _errlog(self, r):
         return await self._gate(r) or PlainTextResponse("log")

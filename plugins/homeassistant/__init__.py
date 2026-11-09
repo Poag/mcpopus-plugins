@@ -3,6 +3,8 @@ Design and verified facts: docs/DESIGN-homeassistant.md."""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import ssl
 import time
@@ -14,6 +16,7 @@ from mcpopus.plugin import BaseModel, Field, Plugin, PluginHost, SecretStr, Tool
 from pydantic import field_validator, model_validator
 
 from . import text as tx
+from .automations import ID_BODY, Context, DefinitionError, build_config, definition_problem
 from .client import HAError, HomeAssistant, RegistryUnavailable, Settings, check_base_url, ssl_context
 from .policy import ENTITY_RE, SERVICE_RE, EntityPolicy, check_service_data, domain_of, norm_glob, writable
 
@@ -26,6 +29,7 @@ _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 class Config(BaseModel):
     base_url: str = Field(description="Home Assistant address, for example http://homeassistant.local:8123 or https://ha.example.com (no path, no credentials)")
+    admin_token: SecretStr | None = Field(None, description="Optional. A long-lived token of an ADMINISTRATOR user, used only by the automation definition tools (Home Assistant's automation config API is administrator-only). Leave empty to keep those tools unavailable. Must differ from token")
     token: SecretStr = Field(description="A long-lived access token. Create it on a dedicated, non-administrator Home Assistant user's profile page, and revoke it there to cut access")
     verify_tls: bool = Field(True, description="Check the server certificate for https. Turn off only on a trusted network, and prefer ca_certificate")
     ca_certificate: str = Field("", max_length=20_000, description="Extra certificate authority in PEM form, for a private certificate. Leave empty for a public certificate")
@@ -35,6 +39,7 @@ class Config(BaseModel):
     allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
     write_entity_allowlist: list[str] = Field([], description="Entities call_service may act on (one pattern per line, for example light.*). Empty means none: this is separate from what can be read, and an entity must also be visible. Needs the call_service tool ticked under Policy in the admin UI")
     automation_categories: list[str] = Field([], description="Automations in these Home Assistant categories (names, one per line) may be triggered, enabled and disabled by the automation tools. Empty means none, except automations matching write_entity_allowlist")
+    automation_id_prefix: str = Field("claude_", description="Automations this connector creates, edits or deletes must have a config id starting with this. Human-written automations never do, so they cannot be changed or deleted")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -59,6 +64,26 @@ class Config(BaseModel):
         raw = v.get_secret_value()
         if not raw.strip() or re.search(r"\s", raw.strip()) or _CTRL.search(raw):
             raise ValueError("must be the access token only: no spaces, line breaks or empty value (copy the whole key)")
+        return v
+
+    @field_validator("admin_token")
+    @classmethod
+    def _admin(cls, v):
+        if v is None:
+            return v
+        raw = v.get_secret_value()
+        if not raw.strip():
+            return None
+        if re.search(r"\s", raw.strip()) or _CTRL.search(raw):
+            raise ValueError("must be the access token only: no spaces, line breaks or empty value (copy the whole key)")
+        return v
+
+    @field_validator("automation_id_prefix", mode="before")
+    @classmethod
+    def _prefix(cls, v):
+        v = v.strip() if isinstance(v, str) else v
+        if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,19}", v):
+            raise ValueError("must be 1 to 20 characters: lower-case letters, digits and underscores, starting with a letter, for example claude_")
         return v
 
     @field_validator("ca_certificate")
@@ -113,6 +138,8 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def _services_vs_domains(self):
+        if self.admin_token is not None and self.admin_token.get_secret_value().strip() == self.token.get_secret_value().strip():
+            raise ValueError("admin_token must be a different token from token: the ordinary token should stay a non-administrator's")
         denied = set(self.domain_denylist)
         if any(domain_of(s) in denied for s in self.allowed_services):
             raise ValueError("allowed_services contains a service in a domain listed in domain_denylist; remove one or the other")
@@ -151,7 +178,8 @@ class HomeAssistantPlugin(Plugin):
 
     def _settings(self) -> Settings:
         c = self.ctx.config
-        return Settings(c.base_url, c.token.get_secret_value(), float(c.timeout_seconds), c.max_response_bytes)  # read at the moment of use
+        admin = c.admin_token.get_secret_value().strip() if c.admin_token else ""
+        return Settings(c.base_url, c.token.get_secret_value(), float(c.timeout_seconds), c.max_response_bytes, admin)  # read at the moment of use
 
     # ------------------------------------------------------------- plumbing
     @staticmethod
@@ -216,6 +244,8 @@ class HomeAssistantPlugin(Plugin):
             f"call_service: {len(cfg.allowed_services)} service(s) allowed; {len(cfg.write_entity_allowlist)} entity pattern(s) it may act on"
             + (" (none: nothing can be changed)." if not cfg.write_entity_allowlist or not cfg.allowed_services else ".")
             + " It is only available if the owner ticked it under Policy.",
+            ("Automation definitions: admin_token is set" if cfg.admin_token else "Automation definitions: no admin_token, so the definition tools are unavailable")
+            + f"; ids Claude may create or change start with {cfg.automation_id_prefix}.",
             "Automations Claude may trigger or switch: " + (f"categories {', '.join(cfg.automation_categories)}" if cfg.automation_categories else "no category set")
             + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
@@ -539,6 +569,104 @@ class HomeAssistantPlugin(Plugin):
         if enabled:
             return await self._automation_call(eid, "turn_on", {}, f"Enabled {eid}.")
         return await self._automation_call(eid, "turn_off", {"stop_actions": False}, f"Disabled {eid} (a run already in progress is left to finish).")
+
+    # ------------------------------------------------- automation definitions
+    def _need_admin(self) -> None:
+        if not self.ctx.config.admin_token:
+            raise ToolError("This needs the admin_token setting (a long-lived token of an administrator user). The owner has not set it.")
+
+    def _config_id(self, automation_id: str) -> str:
+        cid = str(automation_id or "").strip().lower()
+        prefix = self.ctx.config.automation_id_prefix
+        if not re.fullmatch(re.escape(prefix) + ID_BODY, cid):
+            raise ToolError(f"automation_id must start with {prefix} followed by 1 to 40 lower-case letters, digits or underscores (for example {prefix}porch_evening). "
+                            "Only automations whose id starts that way can be created, changed or deleted by this connector.")
+        return cid
+
+    @tool(tier="read", untrusted=True)
+    async def get_automation_definition(self, entity_id: str) -> str:
+        """Show the triggers, conditions and actions of one automation (needs the owner's admin_token). Definitions that contain templates or name something this connector may not see are not shown."""
+        eid = self._entity_id(entity_id)
+        none = "No definition available."  # hidden, missing, templated and unreadable definitions all give this
+        states = await self._visible_states_guarded()
+        s = states.get(eid)
+        if s is None or domain_of(eid) != "automation":
+            return none
+        self._need_admin()
+        attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
+        cid = attrs.get("id")
+        if not isinstance(cid, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", cid):
+            return none
+        config = await self._guard(self.ha.automation_config(cid))
+        if config is None:
+            return none
+        known = frozenset(domain_of(e["entity_id"]) for e in await self._guard(self.ha.states()))
+        if definition_problem(config, lambda text: self.policy.mentions_hidden(text, known)):
+            return none
+        text = json.dumps(config, ensure_ascii=True, indent=1)  # ensure_ascii escapes any control character
+        return f"definition of {eid} (config id {cid}):\n" + (text if len(text) <= 6000 else text[:6000] + "\n[truncated]")
+
+    @tool(tier="write", untrusted=True)
+    async def save_automation(self, automation_id: str, alias: str, triggers: list[dict], actions: list[dict], conditions: list[dict] | None = None,
+                              description: str = "", mode: str = "single") -> str:
+        """Create or replace an automation whose id starts with the owner's prefix (default claude_). Only simple triggers (state, numeric_state, time, time_pattern, sun), conditions (state, numeric_state, time, sun) and actions (an allowed service on one allowed entity, or a delay); no templates. New automations start disabled. Triggers and conditions are like {"type": "state", "entity_id": "binary_sensor.door", "to": "on"}; actions like {"service": "light.turn_on", "entity_id": "light.porch", "data": {"brightness": 120}} or {"delay": "00:00:10"}."""
+        cfg = self.ctx.config
+        self._need_admin()
+        cid = self._config_id(automation_id)
+        states = await self._visible_states_guarded()
+        allowed = tuple(sv for sv in cfg.allowed_services if self.policy.service_allowed(sv, tuple(cfg.allowed_services)))
+        ctx = Context(self.policy.visible, lambda e: e in states, lambda e: writable(self.policy, self.write_allow, e), allowed)
+        try:
+            config = build_config(cid, alias, description, mode, triggers, conditions, actions, ctx)
+        except DefinitionError as e:
+            raise ToolError(str(e)) from None
+        for e, st in states.items():
+            a = st.get("attributes") if isinstance(st.get("attributes"), dict) else {}
+            if domain_of(e) == "automation" and self._name(st).casefold() == config["alias"].casefold() and a.get("id") != cid:
+                raise ToolError("An automation with that name already exists. Choose a different alias.")
+        existing = await self._guard(self.ha.automation_config(cid))
+        if existing is None:
+            config["initial_state"] = False  # a new automation does nothing until the owner enables it
+        elif "initial_state" in existing:
+            config["initial_state"] = existing["initial_state"]  # keep the owner's choice on later edits
+        self._take_write_slot()
+        await self._guard(self.ha.save_automation_config(cid, config))
+        self.ctx.logger.info("automation saved: %s (%s)", cid, "updated" if existing is not None else "created")
+        stats = getattr(self.ctx, "stats", None)
+        if stats is not None:
+            stats.count("automation_saves", 1)
+        entity = ""
+        for _ in range(6):  # Home Assistant reloads the automation and gives it an entity a moment later
+            for st in await self._guard(self.ha.states(fresh=True)):
+                a = st.get("attributes") if isinstance(st.get("attributes"), dict) else {}
+                if domain_of(st["entity_id"]) == "automation" and a.get("id") == cid and self.policy.visible(st["entity_id"]):
+                    entity = st["entity_id"]
+                    break
+            if entity:
+                break
+            await asyncio.sleep(0.5)
+        lines = [f"{'Updated' if existing is not None else 'Created'} automation {cid} ({tx.clean(config['alias'], 100)}).",
+                 f"entity: {entity or 'not visible yet (Home Assistant is still reloading)'}",
+                 f"{len(config['triggers'])} trigger(s), {len(config.get('conditions', []))} condition(s), {len(config['actions'])} action(s), mode {config['mode']}.",
+                 ("It starts DISABLED: it does nothing until the owner enables it in Home Assistant. A later edit keeps that setting." if existing is None
+                  else f"initial_state is {'kept as the owner set it' if 'initial_state' in config else 'not set, so the owner controls whether it runs'}."),
+                 "Home Assistant rewrites automations.yaml when saving, so comments in that file are not kept."]
+        return "\n".join(lines)
+
+    @tool(tier="admin")
+    async def delete_automation(self, automation_id: str) -> str:
+        """Delete an automation whose id starts with the owner's prefix (default claude_). Others cannot be deleted. This cannot be undone."""
+        self._need_admin()
+        cid = self._config_id(automation_id)
+        if await self._guard(self.ha.automation_config(cid)) is None:
+            return "No such automation."
+        self._take_write_slot()
+        await self._guard(self.ha.delete_automation_config(cid))
+        self.ctx.logger.info("automation deleted: %s", cid)
+        stats = getattr(self.ctx, "stats", None)
+        if stats is not None:
+            stats.count("automation_deletes", 1)
+        return f"Deleted automation {cid}. Home Assistant rewrites automations.yaml, so comments in that file are not kept."
 
     def _brief(self, s: dict) -> str:
         attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}
