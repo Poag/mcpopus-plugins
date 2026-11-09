@@ -34,6 +34,7 @@ development branch, so details may differ from the release Alex runs (unverified
 | Automation services are `turn_on`, `turn_off` (field `stop_actions`, default true), `toggle`, `trigger` (field `skip_condition`, **default true**, which runs the actions while ignoring the automation's conditions) and `reload` | Core `components/automation/services.yaml` |
 | Categories are read over the same read-only WebSocket: `config/category_registry/list` with `scope` (`automation`), not administrator-only, entries `{category_id, name, icon}`; each entity-registry entry carries `categories` (for example `{"automation": "<id>"}`) | Core `components/config/category_registry.py`, `helpers/category_registry.py`, `helpers/entity_registry.py` |
 | Automation definitions are edited through `/api/config/automation/config/<id>` (GET, POST, DELETE), **all administrator-only**. POST validates the whole automation, rewrites `automations.yaml` with that id's config replaced, and reloads it; DELETE removes the YAML entry and the entity-registry entry | Core `components/config/view.py`, `components/config/automation.py` |
+| A Home Assistant user can be marked **local only**: authentication is then refused over a cloud connection (Nabu Casa) and from any address that is not on a local network | Core `components/http/auth_util.py` (`async_user_not_allowed_do_auth`, `local_only`, `is_local`) |
 | `POST /api/template` is administrator-only and runs arbitrary templates. Not used | Core `components/api/__init__.py` (`@require_admin`) |
 | `GET /api/config` returns version, latitude, longitude, elevation, `config_dir`, URLs. The plugin reads only `version` | Docs `docs/api/rest.md` |
 | A wrong token counts toward Home Assistant's IP ban only when `login_attempts_threshold` is set; the default means no banning | Core `components/http/ban.py`, `components/http/__init__.py` (`NO_LOGIN_ATTEMPT_THRESHOLD`) |
@@ -139,9 +140,9 @@ as data and caps their size).
 | `list_automations` | `category`, `state`, `limit`, `offset` | Automations with state, last run, running count, category, and whether this connector may control each. Read |
 | `trigger_automation` | `entity_id` | **Tier write.** Runs one automation with its conditions respected. Section 9b |
 | `set_automation_enabled` | `entity_id`, `enabled` | **Tier write.** Enables or disables one automation without stopping a run in progress. Section 9b |
-| `get_automation_definition` | `entity_id` | Read (needs `admin_token`). The triggers, conditions and actions of one automation; refused as "No definition available." if it contains templates or names anything hidden. Section 9c |
-| `save_automation` | `automation_id`, `alias`, `triggers`, `conditions`, `actions`, `description`, `mode` | **Tier write** (needs `admin_token`). Creates or replaces an automation whose id starts with the prefix; strict subset; starts disabled. Section 9c |
-| `delete_automation` | `automation_id` | **Tier admin** (needs `admin_token`). Deletes an automation whose id starts with the prefix. Section 9c |
+| `get_automation_definition` | `entity_id` | Read (needs the token's user to be an administrator). The triggers, conditions and actions of one automation; refused as "No definition available." if it contains templates or names anything hidden. Section 9c |
+| `save_automation` | `automation_id`, `alias`, `triggers`, `conditions`, `actions`, `description`, `mode` | **Tier write** (needs the token's user to be an administrator). Creates or replaces an automation whose id starts with the prefix; strict subset; starts disabled. Section 9c |
+| `delete_automation` | `automation_id` | **Tier admin** (needs the token's user to be an administrator). Deletes an automation whose id starts with the prefix. Section 9c |
 
 Not built, on purpose: the template endpoint, a raw API pass-through, any call to an arbitrary URL, the camera proxy, the error log,
 event firing, state setting, WebSocket subscriptions, group, area, device and "all" targets, and responses from services (`return_response`).
@@ -151,7 +152,7 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `base_url` | required | `http(s)://host[:port]`, no credentials, query or path. Plain `http` sends the token unencrypted: acceptable only on a network you trust |
-| `token` | required (secret) | Long-lived access token. Create it on a dedicated, non-administrator user, so the token cannot do more than that user can |
+| `token` | required (secret) | Long-lived access token of a dedicated Home Assistant user. For the read tools and `call_service`, a non-administrator is enough and safer. The automation definition tools (section 9c) need the user to be an **administrator**: then also mark the user **local only** (section 9c, control 1) |
 | `verify_tls` | true | Turning it off removes the protection of https |
 | `ca_certificate` | empty | PEM text of a private certificate authority |
 | `entity_allowlist` | empty | Globs. Empty means all entities not denied |
@@ -159,7 +160,6 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `domain_denylist` | the six domains above | Replacing the list removes the defaults |
 | `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Empty means no service may be called |
 | `write_entity_allowlist` | empty | Globs for the entities `call_service` may act on. Separate from what can be read: an entity must also be visible. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
-| `admin_token` | empty (secret) | Optional long-lived token of an **administrator** user, used only for the three definition tools and only sent to the automation config API. Must differ from `token` |
 | `automation_id_prefix` | `claude_` | Ids Claude may create, change or delete must start with this. Human-written automations never do |
 | `automation_categories` | empty | Names of Home Assistant automation categories (case-insensitive). Automations in these categories can be triggered, enabled and disabled. Empty means none, except automations matching `write_entity_allowlist` |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
@@ -260,10 +260,15 @@ for service calls (Core `helpers/config_validation.py`, `components/automation/c
 
 Controls, all enforced by the plugin before anything is sent:
 
-1. **A second, optional secret, `admin_token`.** The ordinary `token` stays a non-administrator's. The administrator token is sent **only** to
-   `/api/config/automation/config/<id>` and the ordinary token never goes there (a non-administrator's call would be refused by Home
-   Assistant and counted towards its IP ban). Without `admin_token` the three tools say so and nothing is sent. It must differ from `token`.
-   A refused administrator token pauses admin calls for 60 seconds.
+1. **One token, and an administrator user to use the definition tools.** Home Assistant's automation config API is administrator-only, so those
+   three tools only work if the token's user is an administrator. Alex chose (9 November 2026) to use the one token rather than a second
+   secret. That makes a leaked token powerful, so the recommended set-up is a **dedicated administrator user marked "local access only"**
+   (user settings in Home Assistant). Home Assistant then refuses that user's token from any address that is not on a local network and over
+   Nabu Casa (verified in Core, section 2), so using a stolen token needs a foothold inside the network, as Alex observed. The host reaches
+   Home Assistant over the LAN, which is local. If the host reaches it through a reverse proxy, the proxy's address must count as local;
+   otherwise sign-in fails and `status` shows the refusal. A non-administrator token still works for everything except these tools: a
+   refused config call pauses **only** the config calls for 60 seconds (Home Assistant counts refused calls towards its IP ban when one is
+   configured), and every other tool carries on.
 2. **Fence by config id.** Claude may create, replace or delete only ids matching `<prefix><1 to 40 of a-z 0-9 _>` (default `claude_`).
    Human-written automations never match, so they cannot be changed or deleted. They can be *read* (see 5).
 3. **Strict subset, built from a whitelist (never passed through).** Triggers: `state`, `numeric_state`, `time`, `time_pattern`, `sun`, only on
@@ -351,8 +356,7 @@ category data need `wsproto` in the host image: without it the tools refuse ever
 
 ## 10d. Acceptance checklist for the definition tools (Alex, against the real Home Assistant)
 
-In Home Assistant create an **administrator** user for this (or use your own), and a long-lived token for it. Update the plugin (0.4.0) and
-enter `admin_token` (the plugin form never shows it back). Keep `automation_id_prefix` at `claude_`, keep `allowed_services` and
+In Home Assistant create a dedicated **administrator** user for this (not your own account), and a long-lived token for it. Mark that user **local access only**. Use that user's token as the plugin's `token` (the plugin form never shows it back). Keep `automation_id_prefix` at `claude_`, keep `allowed_services` and
 `write_entity_allowlist` as already set (light services on `light.*`). Under Policy tick `save_automation`, `delete_automation` and set
 **both to Needs approval**. Then:
 
@@ -366,7 +370,8 @@ enter `admin_token` (the plugin form never shows it back). Keep `automation_id_p
 5. "Change automation 1001" (or an automation you wrote) and "delete <one of yours>." Expect refusals that say the id must start with `claude_`.
 6. "Delete claude_porch_test." Approve. Expect it gone from Home Assistant.
 7. Open `automations.yaml` and check the other automations are intact (comments are not preserved: a known Home Assistant behaviour).
-8. In the Home Assistant log check that the administrator token was only used for config calls.
+8. In Home Assistant open the user's profile and check the token's last use. Try the same token from a device outside your network (or
+   through Nabu Casa) and confirm Home Assistant refuses it because the user is local only.
 
 ## 11. Live check results
 

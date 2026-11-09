@@ -19,7 +19,7 @@ Read-only view of a Home Assistant home. Entity and domain policy is enforced by
 search, list, count and summary and is answered exactly like a missing one. Defaults hide locks, alarm panels, cameras, people, device
 trackers and notifiers. Area and device data need the `wsproto` library in the host image (design doc, section 2); without it
 everything else still works. `call_service` (write, 0.2.0) calls one allowed service on one named, allowed entity and returns the state before and after; it is off until
-the owner ticks it, and it needs `allowed_services` and `write_entity_allowlist` as well (design, section 9). Automations can be listed, and triggered, enabled and disabled when they are in a Home Assistant category the owner names (section 9b); definitions can be read, created, replaced and deleted for automations the owner's prefix marks as Claude's, with an optional separate administrator token and a strict subset (section 9c). Needs: the Home Assistant address and a long-lived access token from a dedicated non-administrator user.
+the owner ticks it, and it needs `allowed_services` and `write_entity_allowlist` as well (design, section 9). Automations can be listed, and triggered, enabled and disabled when they are in a Home Assistant category the owner names (section 9b); definitions can be read, created, replaced and deleted for automations the owner's prefix marks as Claude's, when the token's user is an administrator (recommended: a dedicated user marked local access only) and within a strict subset (section 9c). Needs: the Home Assistant address and a long-lived access token from a dedicated non-administrator user.
 
 ## swarmui
 

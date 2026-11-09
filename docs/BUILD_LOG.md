@@ -11,13 +11,17 @@ administrator token, trusts MCP clients). Built the automation definition tools 
 credited in NOTICE.md for behaviours learned (reload lag and entity replacement, alias collision guard, config API, `initial_state` override).
 No code copied.
 
-Decisions: a separate optional `admin_token` that is only ever sent to the config API; id-prefix fence (`claude_`) so human automations are
+Decisions (revised the same day): the first build had a separate optional `admin_token`; Alex asked to reuse the one `token`, so it was removed. A
+non-administrator token now only loses the three definition tools (a refused config call pauses just those for 60 seconds, not the whole
+plugin). Alex's mitigation for the larger blast radius: a dedicated administrator user marked "local access only", which Home Assistant
+enforces by refusing that user's token from non-local addresses and over Nabu Casa (verified in Core `components/http/auth_util.py`).
+Other decisions: id-prefix fence (`claude_`) so human automations are
 never changed; a whitelist builder instead of passing YAML through; templates refused everywhere; new automations start disabled; defaults
 taken from the 9c proposal because Alex's choice of option B and his earlier request for all four automation features pointed that way.
 
 Verified: Home Assistant accepts `trigger:` and `platform:` for trigger types and `action:` for service calls; `initial_state` is a valid key.
-Tests: 16 new (fake Home Assistant with a separate administrator token and a config API); the fake refuses the wrong token on every route, and
-a test asserts each token is only used where it belongs. Mutation checks: the prefix fence, the template rule in action data, the write
+Tests: 16 new (fake Home Assistant with a separate administrator token and a config API); the fake refuses a non-administrator on the config API, and
+tests assert one refusal then a pause, and that everything else keeps working. Mutation checks: the prefix fence, the template rule in action data, the write
 list, the service allow list, the self-trigger guard, starting disabled, the hidden-definition filter, sending the admin token everywhere,
 and the alias guard each make at least one test fail. The template-in-data test found a real gap (templates in action `data` were accepted)
 which is fixed.
