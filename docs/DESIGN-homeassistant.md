@@ -373,6 +373,15 @@ In Home Assistant create a dedicated **administrator** user for this (not your o
 8. In Home Assistant open the user's profile and check the token's last use. Try the same token from a device outside your network (or
    through Nabu Casa) and confirm Home Assistant refuses it because the user is local only.
 
+## 10e. If settings do not seem to take effect
+
+Found during the first test of 0.4.0 (9 November 2026): the connector kept reporting "0 service(s) allowed" after the owner changed
+`allowed_services`. The host keeps the **old** plugin version running when a reload of the new settings fails, so a rejected setting looks
+like it was ignored. Check, in order: the plugin page shows no error after Save and reload; every list setting has **one entry per line**
+(a comma-separated line such as `light.turn_on, light.turn_off` is refused, naming the setting, because each entry must be exactly one
+`domain.service`); and `status` shows a recent "settings were loaded" time (added in 0.4.1). Write and admin tools such as
+`delete_automation` are also only served after the owner turns read-only off and ticks each by name under Policy and saves the policy.
+
 ## 11. Live check results
 
 7 November 2026, plugin 0.1.0 on Alex's host against his real Home Assistant, through a claude.ai connector, by the 18-step prompt.

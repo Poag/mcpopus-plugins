@@ -3,6 +3,15 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-09: homeassistant 0.4.1 (status shows plugin version and settings load time)
+
+First live test of 0.4.0: all refusals worked, but the owner's new `allowed_services` and `write_entity_allowlist` never reached the connector
+(status kept saying 0 services) and `delete_automation` was not served. Not a plugin fault as far as can be seen: the host keeps the old
+version running when a reload fails (for example a comma-separated list, which the validator rejects), and admin tools need their own tick.
+Lesson: the plugin could not show whether a reload had applied. `status` now reports the plugin version, when the current settings were
+loaded, and a hint. Design section 10e records the checks. Also found: the test prompt's placeholder entity made most step 8 refusals test
+the wrong rule, so prompts must use real entities.
+
 ## 2026-11-09: homeassistant 0.4.0 (automation definitions, ported from ha-mcp's approach)
 
 Alex asked whether `homeassistant-ai/ha-mcp` could be reused as a plugin and chose "port chosen capabilities" over a proxy or a separate
