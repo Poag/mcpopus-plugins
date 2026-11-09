@@ -9,17 +9,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
 from . import writer
+from .bases import base_links, link_matches_base
 from .couch import Conflict, CouchDB, CouchError
 from . import crypto
 from .livesync import COMPRESSED_MARK, SYNC_PARAMETERS_ID, NOTE_TYPES, Codec, LiveSyncError, NoteMeta, nfc
 from .parse import Parsed, parse
-from .paths import FolderPolicy, PathError, is_note_path, validate_note_path
+from .paths import FolderPolicy, PathError, is_base_path, is_note_path, validate_base_path, validate_note_path
 
 VERSION_DOC = "obsydian_livesync_version"
 KNOWN_FEATURES = {"encrypted-internal-metadata-v1", "nfc-path-identity-v1"}  # neither changes how plain notes are written
@@ -28,6 +30,17 @@ MAX_KNOWN_VERSION = 13
 log = logging.getLogger("mcpopus.plugin.obsidian")
 REFRESH_MIN_INTERVAL = 1.0
 SELECTOR = {"type": {"$in": list(NOTE_TYPES)}}
+MAX_EXTENSIONS_SHOWN = 20
+
+
+def extension_of(path: str) -> str:
+    """Lower-case extension of the last path segment, or a fixed label. Only ever a short [a-z0-9] string, safe to report."""
+    name = path.rsplit("/", 1)[-1]
+    i = name.rfind(".")
+    if i <= 0 or i == len(name) - 1:
+        return "(none)"
+    ext = name[i + 1:].lower()
+    return ext if re.fullmatch(r"[a-z0-9]{1,10}", ext) else "(other)"
 
 
 class WriteRefused(Exception):
@@ -46,10 +59,11 @@ class VaultStats:
 class Vault:
     def __init__(self, couch: CouchDB, passphrase: str | None, policy: FolderPolicy, *, max_note_bytes: int,
                  max_scan_notes: int, cache_bytes: int = 32 * 1024 * 1024, writable: FolderPolicy | None = None,
-                 max_write_bytes: int = 1_000_000) -> None:
+                 max_write_bytes: int = 1_000_000, max_base_bytes: int = 100_000) -> None:
         self.couch, self.passphrase, self.policy = couch, passphrase, policy
         self.writable = writable or FolderPolicy()  # no readable folders listed means nothing is writable
         self.max_write_bytes = max_write_bytes
+        self.max_base_bytes = max_base_bytes
         self._write_lock = asyncio.Lock()
         self._gate_cache: tuple[float, str | None, bool] | None = None
         self.write_mode: str | None = None  # "plain" or "hkdf", set by the write gate
@@ -57,6 +71,10 @@ class Vault:
         self.codec = Codec(passphrase, None)
         self.notes: dict[str, NoteMeta] = {}  # NFC path -> meta
         self._by_id: dict[str, str] = {}
+        self.bases: dict[str, NoteMeta] = {}  # NFC path -> meta, for .base files (kept apart from notes)
+        self._base_by_id: dict[str, str] = {}
+        self._other: dict[str, str] = {}  # document id -> extension, for documents that are neither notes nor bases
+        self._base_links: dict[tuple[str, str], list[str]] = {}
         self.stats = VaultStats()
         self._seq: str | int = 0
         self._lock = asyncio.Lock()
@@ -94,12 +112,15 @@ class Vault:
                 batch = res.get("results", [])
                 ops = await asyncio.to_thread(self._decode_batch, batch)
                 for kind, key, meta in ops:
-                    if kind == "remove":
-                        self._remove_id(key)
-                    else:
-                        self._remove_id(meta.doc_id)
+                    self._remove_id(key)
+                    if kind == "upsert":
                         self.notes[nfc(meta.path)] = meta
                         self._by_id[meta.doc_id] = nfc(meta.path)
+                    elif kind == "base":
+                        self.bases[nfc(meta.path)] = meta
+                        self._base_by_id[meta.doc_id] = nfc(meta.path)
+                    elif kind == "other":
+                        self._other[key] = extension_of(meta.path)
                 self._seq = res.get("last_seq", self._seq)
                 if len(batch) < 500:
                     break
@@ -112,9 +133,13 @@ class Vault:
         key = self._by_id.pop(doc_id, None)
         if key is not None:
             self.notes.pop(key, None)
+        base_key = self._base_by_id.pop(doc_id, None)
+        if base_key is not None:
+            self.bases.pop(base_key, None)
+        self._other.pop(doc_id, None)
 
     def _decode_batch(self, batch: list[dict[str, Any]]) -> list[tuple[str, str, NoteMeta | None]]:
-        ops: list[tuple[str, str, NoteMeta | None]] = []
+        ops: list[tuple[str, str, NoteMeta | None]] = []  # kind: remove | upsert (note) | base | other
         for change in batch:
             doc = change.get("doc")
             if change.get("deleted") or not doc:
@@ -126,10 +151,14 @@ class Vault:
                 self.stats.undecodable += 1
                 ops.append(("remove", change["id"], None))
                 continue
-            if meta is None or not is_note_path(meta.path):
+            if meta is None:
                 ops.append(("remove", change["id"], None))
-            else:
+            elif is_note_path(meta.path):
                 ops.append(("upsert", meta.doc_id, meta))
+            elif is_base_path(meta.path):
+                ops.append(("base", meta.doc_id, meta))
+            else:
+                ops.append(("other", meta.doc_id, meta))  # counted by extension only; never served
         return ops
 
     # ----------------------------------------------------------------- reads
@@ -203,6 +232,69 @@ class Vault:
                 self._parsed[(m.doc_id, m.rev)] = parse(texts[m.path])
         return {m.path: self._parsed[(m.doc_id, m.rev)] for m in metas if (m.doc_id, m.rev) in self._parsed}
 
+    # ----------------------------------------------------------------- bases
+    def visible_bases(self) -> list[NoteMeta]:
+        return [m for m in self.bases.values() if self.policy.allows_path(m.path)]
+
+    def find_base(self, path: str) -> NoteMeta:
+        validate_base_path(path)
+        meta = self.bases.get(nfc(path))
+        if meta is None:
+            meta = next((m for k, m in self.bases.items() if k.casefold() == nfc(path).casefold()), None)
+        # Blocked and missing bases look the same.
+        if meta is None or not self.policy.allows_path(meta.path):
+            raise PathError("No such base.")
+        return meta
+
+    async def read_base(self, path: str) -> tuple[NoteMeta, str]:
+        """The raw text of one base. A base over max_base_bytes is refused, not cut: a cut YAML text would mislead."""
+        meta = self.find_base(path)
+        if meta.size and meta.size > self.max_base_bytes:
+            raise PathError("That base is larger than the configured limit.")
+        got = await self.texts([meta])
+        if meta.path not in got:
+            raise LiveSyncError("That base could not be read from the database (not text, missing chunk or wrong passphrase).")
+        if len(got[meta.path].encode("utf-8")) > self.max_base_bytes:
+            raise PathError("That base is larger than the configured limit.")
+        return meta, got[meta.path]
+
+    async def base_links_of(self, metas: list[NoteMeta]) -> dict[str, list[str]]:
+        """Targets of links and embeds that point at a .base file, per note path, cached by revision."""
+        metas = metas[: self.max_scan_notes]
+        texts = await self.texts([m for m in metas if (m.doc_id, m.rev) not in self._base_links])
+        for m in metas:
+            if m.path in texts:
+                self._base_links[(m.doc_id, m.rev)] = base_links(texts[m.path])
+        return {m.path: self._base_links[(m.doc_id, m.rev)] for m in metas if (m.doc_id, m.rev) in self._base_links}
+
+    async def notes_linking_base(self, base_path: str) -> list[str]:
+        """Readable notes that link or embed this base. Notes the policy hides are never examined."""
+        links = await self.base_links_of(self.visible())
+        return sorted(p for p, targets in links.items() if any(link_matches_base(t, base_path) for t in targets))
+
+    def base_link_found(self, target: str) -> bool:
+        """Does a link target resolve to a readable base? A blocked base and a missing one both answer False."""
+        return any(link_matches_base(target, m.path) for m in self.visible_bases())
+
+    def extension_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for ext in [*(["md"] * len(self.notes)), *(["base"] * len(self.bases)), *self._other.values()]:
+            counts[ext] = counts.get(ext, 0) + 1
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        shown = dict(ordered[:MAX_EXTENSIONS_SHOWN])
+        if len(ordered) > MAX_EXTENSIONS_SHOWN:
+            shown["(other extensions)"] = sum(n for _, n in ordered[MAX_EXTENSIONS_SHOWN:])
+        return shown
+
+    def base_report(self) -> dict[str, Any]:
+        """Counts only: no names, no content."""
+        visible = len(self.visible_bases())
+        types: dict[str, int] = {}
+        for m in self.bases.values():
+            types[m.kind] = types.get(m.kind, 0) + 1
+        return {"in_vault": len(self.bases), "readable_here": visible, "not_readable_here": len(self.bases) - visible, "stored_as": types,
+                "not_served": sum(1 for e in self._other.values() if e == "base")}
+
     # ---------------------------------------------------------- diagnostics
     async def diagnose(self) -> dict[str, Any]:
         info = await self.couch.info()
@@ -213,6 +305,8 @@ class Vault:
         report = await asyncio.to_thread(self.codec.classify, pseudo + chunks)
         report["sampled_chunks"] = len(chunks)
         report["database"] = {"doc_count": info.get("doc_count"), "reachable": True}
+        report["documents_by_extension"] = self.extension_counts()
+        report["bases"] = self.base_report()
         report["sync_parameters_found"] = self.salt_found
         report["passphrase_configured"] = bool(self.passphrase)
         report["writes"] = {"writable_folders": list(self.writable.readable), "database_gate": (await self.write_gate(force=True)) or "ok", "mode": self.write_mode}

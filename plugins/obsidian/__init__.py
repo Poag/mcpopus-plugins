@@ -11,6 +11,7 @@ from urllib.parse import quote
 from mcpopus.plugin import BaseModel, Field, Plugin, PluginHost, SecretStr, ToolError, tool
 from pydantic import field_validator
 
+from .bases import base_links, parse_base, summarise
 from .couch import Conflict, CouchDB, CouchError
 from .livesync import LiveSyncError, NoteMeta
 from .parse import link_target_matches, snippet
@@ -31,6 +32,7 @@ class Config(BaseModel):
     max_write_bytes: int = Field(1_000_000, ge=1_000, le=20_000_000, description="Largest note a write may store")
     instructions: str = Field("", max_length=4000, description="Text shown to the AI client with this connector (how your vault is organised, conventions to follow). Do not put secrets here")
     max_note_bytes: int = Field(2_000_000, ge=1_000, le=50_000_000, description="Notes larger than this are not read")
+    max_base_bytes: int = Field(100_000, ge=1_000, le=5_000_000, description="Bases (.base files) larger than this are not read; they are refused, not cut")
     max_scan_notes: int = Field(5_000, ge=10, le=100_000, description="Most notes scanned for tags, links and search in one call")
 
 
@@ -194,10 +196,57 @@ class Obsidian(Plugin):
                            and any(link_target_matches(link, meta.path) for link in all_parsed[m.path].links))
         links = [link for link in (parsed.links if parsed else []) if _link_allowed(v, link)]
         fm = "\n".join(f"  {k}: {val}" for k, val in (parsed.frontmatter if parsed else {}).items()) or "  (none)"
+        # Links to .base files: a base that is missing and one the owner blocked both answer "not found".
+        targets = base_links(text)[:50]
+        base_line = ["bases: " + ", ".join(f"{t} ({'found' if v.base_link_found(t) else 'not found'})" for t in targets)] if targets else []
         return "\n".join([
             f"[Open in Obsidian]({self._link(meta.path)})", f"path: {meta.path}", f"size: {meta.size or len(text.encode())} bytes",
             f"created: {_ts(meta.ctime)}", f"modified: {_ts(meta.mtime)}", f"tags: {', '.join(parsed.tags) if parsed else ''}",
-            f"links: {', '.join(links)}", f"backlinks: {', '.join(backlinks)}", "frontmatter:", fm,
+            f"links: {', '.join(links)}", f"backlinks: {', '.join(backlinks)}", *base_line, "frontmatter:", fm,
+        ])
+
+    # ---------------------------------------------------------------- bases
+    def _base_open_link(self, path: str) -> str:
+        """Obsidian's open link needs the extension for anything that is not a note."""
+        return f"obsidian://open?vault={quote(self.ctx.config.vault_name, safe='')}&file={quote(path, safe='')}"
+
+    @tool(tier="read", untrusted=True)
+    async def list_bases(self, folder: str = "", name: str = "", limit: int = 50, offset: int = 0) -> str:
+        """List Obsidian Bases (.base files), newest first: path, size and modified time. folder: a folder; name: text the path must contain."""
+        name = str(name or "").strip()
+        if len(name) > 100:
+            raise ToolError("Search values are limited to 100 characters.")
+        v = await self._ready()
+        folder = self._folder(folder)
+        limit = max(1, min(limit if isinstance(limit, int) and not isinstance(limit, bool) else 50, 200))
+        offset = max(0, offset if isinstance(offset, int) and not isinstance(offset, bool) else 0)
+        hits = [m for m in v.visible_bases() if self._in_folder(m.path, folder) and (not name or name.casefold() in m.path.casefold())]
+        hits.sort(key=lambda m: (-m.mtime, m.path.casefold()))
+        page = hits[offset: offset + limit]
+        head = f"{len(hits)} bases (showing {offset + 1 if page else 0} to {offset + len(page)})."
+        if offset + len(page) < len(hits):
+            head += f" Use offset {offset + len(page)} for the next page."
+        return "\n".join([head, *(f"- {_ts(m.mtime)} [{m.path}]({self._base_open_link(m.path)}) ({m.size} bytes)" for m in page)])
+
+    @tool(tier="read", untrusted=True)
+    async def read_base(self, path: str) -> str:
+        """Read one Obsidian Base (.base file) by its vault-relative path: the raw YAML, a summary of its filters, formulas and views, and the notes that embed it. Nothing is evaluated."""
+        v = await self._ready()
+        try:
+            meta, text = await v.read_base(path)
+        except (PathError, LiveSyncError, CouchError) as e:
+            raise ToolError(str(e)) from None
+        result = await asyncio.to_thread(parse_base, text)
+        if result.status == "ok":
+            summary = ["parse: ok", "summary:", *("  " + line for line in summarise(result.data))]
+        else:
+            summary = [f"parse: {result.status} ({result.reason})"]
+        linked = await v.notes_linking_base(meta.path)
+        shown = ", ".join(linked[:50]) + (f" and {len(linked) - 50} more" if len(linked) > 50 else "")
+        return "\n".join([
+            f"[Open in Obsidian]({self._base_open_link(meta.path)})", f"path: {meta.path}", f"size: {meta.size or len(text.encode())} bytes",
+            f"modified: {_ts(meta.mtime)}", *summary, f"linked or embedded from ({len(linked)}): {shown or '(none)'}",
+            "Computed by mcpopus from the stored file; nothing in the base was evaluated.", "--- raw ---", text,
         ])
 
     # --------------------------------------------------------------- writes
@@ -316,7 +365,7 @@ async def setup(host: PluginHost) -> None:
     policy = FolderPolicy.build(cfg.readable_folders, cfg.blocked_folders)
     vault = Vault(couch, cfg.passphrase.get_secret_value() if cfg.passphrase else None, policy,
                   max_note_bytes=cfg.max_note_bytes, max_scan_notes=cfg.max_scan_notes,
-                  writable=FolderPolicy.build(cfg.writable_folders, []), max_write_bytes=cfg.max_write_bytes)
+                  writable=FolderPolicy.build(cfg.writable_folders, []), max_write_bytes=cfg.max_write_bytes, max_base_bytes=cfg.max_base_bytes)
     plugin = Obsidian(ctx, vault)
 
     async def warm() -> None:  # build the index in the background so the first call is quick; errors surface on use

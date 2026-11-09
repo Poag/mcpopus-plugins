@@ -42,6 +42,30 @@ def is_note_path(path: str) -> bool:
         return False
 
 
+def validate_base_path(path: str) -> str:
+    """Vault-relative, ends in exactly .base, same traversal and hidden-folder rules as note paths (so never inside .obsidian)."""
+    if not path or len(path) > 1000 or path.startswith("/") or "\0" in path or ".." in path:
+        raise PathError("Invalid base path.")
+    if ":" in path:
+        raise PathError("Invalid base path: ':' is not allowed.")
+    if not path.endswith(".base"):
+        raise PathError("Base paths are vault-relative and end in .base.")
+    for seg in re.split(r"[/\\]", path):
+        if seg == "":
+            raise PathError("Invalid base path: empty segment.")
+        if seg.startswith("."):
+            raise PathError("Dot-folders and hidden files are not available.")
+    return path
+
+
+def is_base_path(path: str) -> bool:
+    try:
+        validate_base_path(path)
+        return True
+    except PathError:
+        return False
+
+
 def validate_folder(folder: str) -> str:
     folder = folder.strip().strip("/")
     if folder and (len(folder) > 1000 or "\0" in folder or ".." in folder or ":" in folder or folder.startswith(".") or "/." in folder or "\\" in folder):
