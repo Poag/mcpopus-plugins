@@ -8,10 +8,18 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 
 | Plugin | Version | Tools (tier) | Design | Set-up |
 | --- | --- | --- | --- | --- |
-| `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
+| `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata, list_bases, read_base (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md), [DESIGN-bases.md](DESIGN-bases.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
 | `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled, save_automation (write); delete_automation (admin); list_automations, get_automation_definition (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
 | `swarmui` | see `plugins/swarmui/plugin.toml` | status, models, LoRAs, describe, parameters, images, job status (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | section 12 of the design |
+
+## obsidian: Bases
+
+From 0.4.0 the plugin lists and reads Obsidian Bases (`.base` files): `list_bases` and `read_base` (read, untrusted output). `read_base` returns the raw
+YAML, a summary of its filters, formulas and views, and the notes that embed it; nothing in a base is evaluated. Bases follow the folder policy
+exactly like notes (a blocked base is answered like a missing one), `get_note_metadata` says whether a linked `.base` is found, and `vault_status` gains
+counts by file extension and for bases. The parsed summary needs PyYAML in the host image; without it the raw text is still returned
+([DESIGN-bases.md](DESIGN-bases.md), sections 7 and 8). Querying a base and writing bases are planned and not built.
 
 ## homeassistant
 

@@ -3,6 +3,27 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-09: obsidian 0.4.0 (Bases phase 1, read-only)
+
+Brief: let Claude see and maintain Obsidian Bases (`.base`), in three phases with stops. This is phase 1. Design: [DESIGN-bases.md](DESIGN-bases.md).
+
+Verified by reading source on this date (details and sources in the design doc, section 1): the Bases file format and function reference
+(obsidianmd/obsidian-help); that LiveSync's `isPlainText` list does not include `.base`, so a base is stored as a `newnote` document with
+base64 chunks (livesync-commonlib at `6b59815` and `main` 0.4.1, obsidian-livesync `main`, octagonal-wheels `main`); that the existing reader
+already received such documents and silently dropped them because the path did not end in `.md`; that `get_note_metadata` has no notion of a
+link resolving, so any "broken link" report about a base comes from outside this repository.
+
+Built: `bases.py` (safe YAML parsing: PyYAML SafeLoader, anchors and aliases refused, node and depth caps, object-constructing tags refused, one
+document, mapping at the top; summary; link extraction), a separate base index in `vault.py`, `list_bases`, `read_base`, base counts and
+extension counts in `vault_status`, a `bases:` line in `get_note_metadata`, setting `max_base_bytes`. 17 new tests (suite 198 passed, 10
+skipped), including a mutation check that the policy leakage assertions fail when the policy is removed, and a side-effect check that an
+object-constructing YAML tag does nothing.
+
+Unverified: everything against a real LiveSync database; the view `sort` key and view-type keys; how the owner's audit reports base links;
+whether the owner's vault stores `.base` as `newnote` (the live checklist in the design doc answers it); CI for this commit.
+
+Needs from the host: PyYAML pinned in `pyproject.toml` and `requirements.lock` (not present today). Until then `read_base` returns the raw text with `parse: unavailable`.
+
 ## 2026-11-09: homeassistant 0.4.2 (comma-separated lists accepted)
 
 The owner's `allowed_services` screenshot showed the cause of the unapplied settings: seven services on ONE comma-separated line, refused by the

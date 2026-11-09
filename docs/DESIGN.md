@@ -11,7 +11,7 @@ the existing connector). **Writes have only been tested against a simulated Couc
 
 | Plugin | Endpoint | State |
 | --- | --- | --- |
-| `obsidian` | `/obsidian` | read and write tools built (0.2.1); writes untested against real LiveSync clients (section 4.9) |
+| `obsidian` | `/obsidian` | read and write tools built (0.4.0: Bases `.base` files added read-only, see [DESIGN-bases.md](DESIGN-bases.md)); writes untested against real LiveSync clients (section 4.9) |
 | `email` (generic IMAP) | `/email` | read tools built (0.1.1), see [email.md](email.md) |
 | `proxy` | `/<name>` | outline (section 6) |
 
@@ -153,6 +153,9 @@ All `tier="read"`. Output is text; tools that return note content are `untrusted
 | `vault_status` | none | JSON counts: how entry ids and chunks are stored (plain or obfuscated; none, hkdf, v1, v2, v3, compressed), whether the sync-parameters salt was found, notes in the vault and readable here, unreadable entries, changes sequence, folder policy. **Never any note content, path or name.** |
 
 Dates are UTC (`2026-11-04T09:20`). Paths are vault-relative and end in `.md`.
+
+From 0.4.0 there are also `list_bases` and `read_base` (read, untrusted) for `.base` files, `vault_status` reports file-extension counts and base counts,
+and `get_note_metadata` adds a `bases:` line when a note links a `.base`. The note tools above never accept `.base` paths. See [DESIGN-bases.md](DESIGN-bases.md).
 
 Path rules (same as es617's `note-path.ts`): no empty path, no leading `/`, no `..`, no NUL, no `:` (LiveSync's own id
 prefixes), must end in `.md`, no segment starting with `.`, at most 1000 characters, and the LiveSync control files

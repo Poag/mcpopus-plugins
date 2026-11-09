@@ -20,7 +20,7 @@ served at its own path and added to claude.ai as its own connector. This reposit
 
 | Plugin | What it does | State |
 | --- | --- | --- |
-| [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags; folder-limited write, move and delete (off by default) |
+| [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags, and Obsidian Bases (`.base`) files (`list_bases`, `read_base`; 0.4.0); folder-limited write, move and delete of notes (off by default). Bases are read-only for now ([design](docs/DESIGN-bases.md)) |
 | [`email`](plugins/email) | Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list, search and read messages | Read-only: nothing is marked read, moved or deleted. No write tools |
 | [`homeassistant`](plugins/homeassistant) | Read the state of a Home Assistant home: entities, areas, history, logbook, with entity and domain policy enforced by the plugin | Read tools, plus write tools (`call_service`, automation trigger and enable) that are off until enabled and allowed by name. Area data needs `wsproto` in the host image |
 | [`swarmui`](plugins/swarmui) | Generate images with a SwarmUI (Stable Diffusion) instance within enforced limits; list models, LoRAs, parameters and history | Read tools, plus generate and cancel (write, off until enabled). Images are not shown to Claude |
