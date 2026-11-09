@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tomllib
+from pathlib import Path
 import re
 import ssl
 import time
@@ -160,6 +162,11 @@ class HomeAssistantPlugin(Plugin):
         self._write_times: deque[float] = deque()  # per-process and disposable: a reload starts empty
         self.ha = HomeAssistant(http, self._settings, ctx.logger)
         self.instructions = (cfg.instructions or "").strip() or None  # the host passes this to the MCP server
+        self.loaded_at = time.time()
+        try:
+            self.version = str(tomllib.loads((Path(__file__).parent / "plugin.toml").read_text())["version"])
+        except Exception:  # noqa: BLE001 - only used in status
+            self.version = "unknown"
 
     def _settings(self) -> Settings:
         c = self.ctx.config
@@ -220,6 +227,8 @@ class HomeAssistantPlugin(Plugin):
         cfg = self.ctx.config
         lines = [
             f"Connected to Home Assistant {version}; the access token works.",
+            f"Plugin version {self.version}; these settings were loaded {time.strftime('%Y-%m-%d %H:%M', time.gmtime(self.loaded_at))} UTC. If you just changed settings and this time is older, "
+            "the reload did not take: the host keeps the old version running when a new one fails to load (check the plugin page for an error, and that lists are one entry per line).",
             f"Visible entities: {len(states)}",
             "By domain: " + (", ".join(f"{d} {n}" for d, n in sorted(counts.items())) or "none"),
             f"Area information: {areas}",

@@ -167,7 +167,7 @@ async def test_list_services_and_status_describe_the_write_setup(ha, tmp_path):
 async def test_write_config_is_validated(ha, tmp_path):
     from mcpopus.manager import PluginLoadError
 
-    for extra, field in (({"write_entity_allowlist": ["lock.*"]}, "write_entity_allowlist"), ({"write_entity_allowlist": ["Bad Pattern"]}, "write_entity_allowlist"),
+    for extra, field in (({"allowed_services": ["light.turn_on, light.turn_off"]}, "allowed_services"), ({"write_entity_allowlist": ["lock.*"]}, "write_entity_allowlist"), ({"write_entity_allowlist": ["Bad Pattern"]}, "write_entity_allowlist"),
                          ({"max_writes_per_minute": 0}, "max_writes_per_minute"), ({"max_writes_per_minute": 1000}, "max_writes_per_minute")):
         with pytest.raises(PluginLoadError) as e:
             async with running_plugin(tmp_path / field / str(len(str(extra))), HOME, values(ha, **extra), SECRETS):

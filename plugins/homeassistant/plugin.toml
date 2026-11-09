@@ -1,4 +1,4 @@
 name = "homeassistant"
-version = "0.4.0"
+version = "0.4.1"
 description = "Read the state of a Home Assistant home: entities, areas, history and logbook, with entity and domain policy enforced by the plugin. Writes (one service on one named entity) are off until the owner enables and allows them."
 min_host_version = "0.1.0"

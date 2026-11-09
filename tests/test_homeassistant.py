@@ -56,6 +56,7 @@ async def test_status_reports_visible_set_only(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, values(ha, entity_denylist=["sensor.secret_*"]), SECRETS) as (c, _, _):
         err, text = await call(c, "status")
         assert not err and "Home Assistant 2026.11.1" in text and "access token works" in text
+        assert re.search(r"Plugin version \d+\.\d+\.\d+; these settings were loaded \d{4}-\d\d-\d\d \d\d:\d\d UTC", text) and "one entry per line" in text
         assert "Visible entities: 133" in text  # 140 minus lock, alarm, camera, person, tracker, notify and the secret meter
         assert "light 3" in text and "sensor " in text and "lock " not in text.split("By domain:")[1].split("\n")[0]
         assert "Area information: available" in text and "denied domains: alarm_control_panel, camera, device_tracker, lock, notify, person" in text
