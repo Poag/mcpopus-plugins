@@ -1,9 +1,9 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.3.0. Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`) that are off until the owner enables each by name and names what they may touch. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.4.0. Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
-(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0) and the automation tools (0.3.0) are
-built and tested against a fake Home Assistant only; their live checks are sections 10b and 10c.
+(`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
+built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d.
 
 ## 1. Goal
 
@@ -139,6 +139,9 @@ as data and caps their size).
 | `list_automations` | `category`, `state`, `limit`, `offset` | Automations with state, last run, running count, category, and whether this connector may control each. Read |
 | `trigger_automation` | `entity_id` | **Tier write.** Runs one automation with its conditions respected. Section 9b |
 | `set_automation_enabled` | `entity_id`, `enabled` | **Tier write.** Enables or disables one automation without stopping a run in progress. Section 9b |
+| `get_automation_definition` | `entity_id` | Read (needs `admin_token`). The triggers, conditions and actions of one automation; refused as "No definition available." if it contains templates or names anything hidden. Section 9c |
+| `save_automation` | `automation_id`, `alias`, `triggers`, `conditions`, `actions`, `description`, `mode` | **Tier write** (needs `admin_token`). Creates or replaces an automation whose id starts with the prefix; strict subset; starts disabled. Section 9c |
+| `delete_automation` | `automation_id` | **Tier admin** (needs `admin_token`). Deletes an automation whose id starts with the prefix. Section 9c |
 
 Not built, on purpose: the template endpoint, a raw API pass-through, any call to an arbitrary URL, the camera proxy, the error log,
 event firing, state setting, WebSocket subscriptions, group, area, device and "all" targets, and responses from services (`return_response`).
@@ -156,6 +159,8 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `domain_denylist` | the six domains above | Replacing the list removes the defaults |
 | `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Empty means no service may be called |
 | `write_entity_allowlist` | empty | Globs for the entities `call_service` may act on. Separate from what can be read: an entity must also be visible. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
+| `admin_token` | empty (secret) | Optional long-lived token of an **administrator** user, used only for the three definition tools and only sent to the automation config API. Must differ from `token` |
+| `automation_id_prefix` | `claude_` | Ids Claude may create, change or delete must start with this. Human-written automations never do |
 | `automation_categories` | empty | Names of Home Assistant automation categories (case-insensitive). Automations in these categories can be triggered, enabled and disabled. Empty means none, except automations matching `write_entity_allowlist` |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
 | `max_results` | 50 | 1 to 500 |
@@ -243,37 +248,43 @@ in a category named in `automation_categories` can be controlled. Reading and li
 - The fence is only as safe as the category's contents. A trigger runs the automation's actions, which can touch locks or anything else.
   Put an automation in the category only if you are content for Claude to run it.
 
-## 9c. Reading and editing automation definitions (designed, not built)
+## 9c. Reading and editing automation definitions (0.4.0)
 
-Alex asked for reading definitions and for creating, editing and deleting automations. Not built yet, because it changes the risk
-picture and needs decisions. What was verified (section 2): the config API is administrator-only, replaces a whole automation per save,
-and rewrites `automations.yaml`. What follows is the design to build once the decisions below are made.
+Alex asked for reading definitions and for creating, editing and deleting automations, and chose to port the capability into this plugin
+rather than proxy ha-mcp (9 November 2026). Behaviours learned from ha-mcp are credited in NOTICE.md; the code is new.
 
-Why it is different: an automation Claude writes runs later with no plugin policy in the loop. A created automation could unlock a door
-on a schedule. The plugin's entity and service lists cannot constrain an automation after it is saved, so the constraint has to be on
-what may be saved.
+Why it is different: an automation Claude writes runs later with no plugin policy in the loop. A created automation could unlock a door on
+a schedule, so what may be saved is the control. What was verified (section 2): the config API is administrator-only, replaces a whole
+automation per save, rewrites `automations.yaml`, and Home Assistant accepts both `trigger:` and `platform:` for trigger types and `action:`
+for service calls (Core `helpers/config_validation.py`, `components/automation/config.py`).
 
-Proposed controls:
+Controls, all enforced by the plugin before anything is sent:
 
-1. **A second, optional secret, `admin_token`**, used only for these tools. The ordinary `token` stays a non-administrator user's, so a
-   leak of it still cannot edit anything. Without `admin_token` the tools are not usable.
-2. **Fence by config id, not category**: Claude may edit or delete only automations whose config `id` starts with `claude_`, and creates
-   only such ids. Human-written automations can be read (if the definition passes the filter below) but never changed or deleted. (A
-   category cannot be assigned through the config API; assigning one needs an administrator registry call.)
-3. **Strict subset on save.** Reject anything that is not: triggers of type `state`, `numeric_state`, `time`, `time_pattern`, `sun` on
-   visible entities; conditions of type `state`, `numeric_state`, `time`, `sun`; actions that are only `action: domain.service` calls
-   on pairs in `allowed_services` against entities in `write_entity_allowlist` (the same checks as `call_service`), or `delay`. No
-   templates anywhere (any string containing `{{` or `{%` is refused), no scripts, scenes, `choose`, `repeat`, `event`, `webhook` or
-   `homeassistant` services.
-4. **New automations start disabled** (`initial_state: false`, to be verified in Home Assistant's automation schema), and the tool tells
-   the owner to review and enable it in Home Assistant, or to call `set_automation_enabled` if it is in an allowed category.
-5. **Reading a definition** (read tier, administrator token): refused as "not available" (the same text as missing) if the definition
-   mentions a hidden entity, a denied domain, or contains templates, so definitions cannot be used to find hidden things.
-6. Tiers: `save_automation` write, `delete_automation` admin. The admin audit lines record the automation id and nothing else.
-7. A read-modify-write on `automations.yaml` loses hand-written YAML comments (Home Assistant rewrites the file). The tool says so.
+1. **A second, optional secret, `admin_token`.** The ordinary `token` stays a non-administrator's. The administrator token is sent **only** to
+   `/api/config/automation/config/<id>` and the ordinary token never goes there (a non-administrator's call would be refused by Home
+   Assistant and counted towards its IP ban). Without `admin_token` the three tools say so and nothing is sent. It must differ from `token`.
+   A refused administrator token pauses admin calls for 60 seconds.
+2. **Fence by config id.** Claude may create, replace or delete only ids matching `<prefix><1 to 40 of a-z 0-9 _>` (default `claude_`).
+   Human-written automations never match, so they cannot be changed or deleted. They can be *read* (see 5).
+3. **Strict subset, built from a whitelist (never passed through).** Triggers: `state`, `numeric_state`, `time`, `time_pattern`, `sun`, only on
+   entities that exist and are visible. Conditions: `state`, `numeric_state`, `time`, `sun`. Actions: an allowed service
+   (`allowed_services`) on **one** entity that is on the write list and in the service's domain, with `data` checked as for `call_service`, or a
+   `delay` of at most an hour. Never: templates anywhere (`{{`, `{%`, `{#`), events, webhooks, `choose`, `if`, `repeat`, `wait_template`,
+   variables, scripts, scenes, other automations, area, device or "all" targets. At most 5 triggers, 5 conditions and 10 actions; mode
+   `single` or `restart`. An automation whose action changes an entity its own trigger watches is refused (it could trigger itself).
+4. **New automations start disabled** (`initial_state: false`, which Home Assistant's schema accepts). A later edit keeps whatever
+   `initial_state` the stored config already has, so the owner's choice survives. To make a Claude-created automation start enabled, the
+   owner removes `initial_state` in Home Assistant's YAML editor (or enables it in the interface for the current run).
+5. **Reading a definition** (read tier, administrator token): the definition is shown only if the automation is visible, has no templates, and
+   no string in it names an entity hidden by the policy (including denied domains such as `lock.`). Otherwise the answer is
+   `No definition available.`, identical for missing, hidden, templated, unreadable and non-automation ids.
+6. **Name clashes**: a new alias may not equal an existing automation's name (as Home Assistant would otherwise rename it silently).
+7. Tiers: `save_automation` write, `delete_automation` admin; both share the `call_service` rate limit, are never retried, and the audit log
+   records argument names only. Home Assistant's own error text is never repeated.
+8. Home Assistant rewrites `automations.yaml` when saving or deleting, so comments in that file are not kept; every save says so.
 
-Decisions needed from Alex before this is built: whether to create an administrator token at all; the `claude_` id prefix rule; whether
-the subset above is acceptable or too narrow; whether created automations must start disabled.
+Not built: editing automations written by hand (the prefix fence refuses), blueprints, scripts, scenes, traces. Home Assistant 2026 versions
+older than the one read here may differ in field names (unverified).
 
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
@@ -337,6 +348,25 @@ category data need `wsproto` in the host image: without it the tools refuse ever
 5. "Trigger automation.does_not_exist" and one you hid in `entity_denylist`. Expect the same "No such entity." for both.
 6. In the logbook confirm only the approved actions happened, and that the automation's conditions were respected (put a false
    condition on it once and trigger: nothing should run).
+
+## 10d. Acceptance checklist for the definition tools (Alex, against the real Home Assistant)
+
+In Home Assistant create an **administrator** user for this (or use your own), and a long-lived token for it. Update the plugin (0.4.0) and
+enter `admin_token` (the plugin form never shows it back). Keep `automation_id_prefix` at `claude_`, keep `allowed_services` and
+`write_entity_allowlist` as already set (light services on `light.*`). Under Policy tick `save_automation`, `delete_automation` and set
+**both to Needs approval**. Then:
+
+1. "Show the definition of <one of your automations>." Expect its triggers and actions, or "No definition available." for one with a
+   template or one that names a lock or another hidden entity.
+2. "Create an automation claude_porch_test: when <a binary sensor> turns on, turn on light.inside_porch, wait 10 seconds, turn it off."
+   Approve. Expect it created and **disabled**. In Home Assistant, open it (Settings, Automations) and check it matches. Enable it in the
+   interface and test it once.
+3. "Add brightness 50 to the turn-on step." Expect an update that keeps your enabled/disabled choice.
+4. "Create an automation that unlocks the front door at 7am." Expect a refusal. "Create one with a template." Expect a refusal.
+5. "Change automation 1001" (or an automation you wrote) and "delete <one of yours>." Expect refusals that say the id must start with `claude_`.
+6. "Delete claude_porch_test." Approve. Expect it gone from Home Assistant.
+7. Open `automations.yaml` and check the other automations are intact (comments are not preserved: a known Home Assistant behaviour).
+8. In the Home Assistant log check that the administrator token was only used for config calls.
 
 ## 11. Live check results
 

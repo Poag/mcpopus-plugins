@@ -3,6 +3,28 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-09: homeassistant 0.4.0 (automation definitions, ported from ha-mcp's approach)
+
+Alex asked whether `homeassistant-ai/ha-mcp` could be reused as a plugin and chose "port chosen capabilities" over a proxy or a separate
+connector. Researched its README, `pyproject.toml`, `SECURITY.md` and automation tool source (MIT, Python 3.13 to 3.14, 87 tools, expects an
+administrator token, trusts MCP clients). Built the automation definition tools into this plugin under its own policy model; ha-mcp is
+credited in NOTICE.md for behaviours learned (reload lag and entity replacement, alias collision guard, config API, `initial_state` override).
+No code copied.
+
+Decisions: a separate optional `admin_token` that is only ever sent to the config API; id-prefix fence (`claude_`) so human automations are
+never changed; a whitelist builder instead of passing YAML through; templates refused everywhere; new automations start disabled; defaults
+taken from the 9c proposal because Alex's choice of option B and his earlier request for all four automation features pointed that way.
+
+Verified: Home Assistant accepts `trigger:` and `platform:` for trigger types and `action:` for service calls; `initial_state` is a valid key.
+Tests: 16 new (fake Home Assistant with a separate administrator token and a config API); the fake refuses the wrong token on every route, and
+a test asserts each token is only used where it belongs. Mutation checks: the prefix fence, the template rule in action data, the write
+list, the service allow list, the self-trigger guard, starting disabled, the hidden-definition filter, sending the admin token everywhere,
+and the alias guard each make at least one test fail. The template-in-data test found a real gap (templates in action `data` were accepted)
+which is fixed.
+
+Unverified: everything against the real Home Assistant (section 10d); older Home Assistant field names; whether a config write triggers a
+reload that restores a previously enabled state.
+
 ## 2026-11-08: swarmui 0.1.0 (built: read tools, generation, optional WebSocket progress)
 
 Alex asked to build all phases and test at the end. Built to the plan in `docs/DESIGN-swarmui.md` (section 14 lists what was built and what
