@@ -146,3 +146,19 @@ Vault: 306 notes, 2 bases (one in `Medical`, blocked), 3 `.yaml` files.
 Still unverified after this run: link resolution (`found` / `not found`) and the "linked or embedded from" list against real data; paging across pages; the view `sort` key (the base has no sort); the oversize refusal on real data; behaviour with PyYAML installed.
 
 Corrections to the live prompt: step 1 should check that `list_bases` and `read_base` exist and are read-only, not that no write tool exists; step 3 needs at least three readable bases; steps 8 and 9 need a note containing `![[Index.base]]` and one containing `![[Missing.base]]`; step 10 should search for a word that occurs only in a base.
+
+### 10.1 Link checks on real data (10 November 2026, plugin 0.4.1, run from the build session with write access to `Test/` only)
+
+Notes in `Test/Projects/`: `Overview.md` (`![[Index.base]]`) and `Bork.md` (`![[Missing.base]]`) written by the owner; `Link Forms.md` and `No Links.md` written by the build session.
+
+| Check | Result |
+| --- | --- |
+| `Overview.md` metadata | `bases: Index.base (found)` |
+| `Bork.md` metadata | `bases: Missing.base (not found)` |
+| `Link Forms.md`: embed with path and view, wikilink with alias, markdown link, link to `Medical/Index.base`, link to a missing base, link inside a code fence | `Test/Projects/Index.base (found)`, `Index.base (found)` (the alias and markdown forms resolve to the same target and are listed once), `Medical/Index.base (not found)`, `Nothing At All.base (not found)`; the code-fence link is not in the `bases:` line. The blocked base answers exactly like the missing one |
+| `No Links.md` | no `bases:` line |
+| `read_base Test/Projects/Index.base` | `linked or embedded from (2): Link Forms.md, Overview.md`; `Bork.md` (links a different base) and nothing from `Medical` are absent |
+
+Observed, existing behaviour, not changed: the older `links:` line (from `parse.py`, which does not mask code) still lists `Only In Code.base`. Only the new `bases:` line and the backlinks ignore code.
+
+Still not exercised on real data: paging across pages and the oversize refusal (need more bases), the `sort` key, a distinctive search word, PyYAML. The build session cannot create `.base` files: the note tools refuse that extension by design and base writing is phase 3.
