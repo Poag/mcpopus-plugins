@@ -17,8 +17,12 @@ fails (mutation-checked: removing PyYAML, a range instead of a pin, and an old `
 whose packages are not installed. The harness gives the manager a `Packages` object and records the requirements as installed (the test environment already has them).
 Suite: 210 passed, 10 skipped, against the real host 0.3.0.
 Verified once by hand here: the host's own `Packages.install` (pip, `--require-hashes`, wheels only) installed exactly these pins from PyPI for all three plugins on
-linux x86_64, Python 3.13. Not verified: the aarch64 PyYAML hash (taken from PyPI's file list, not installed), loading from the installed directory (the test venv already
-has the packages and host-provided packages win), and an install on the real host.
+linux x86_64, Python 3.13. Not verified here: the aarch64 PyYAML hash (taken from PyPI's file list, not installed), and loading from the installed directory (the test venv already
+has the packages and host-provided packages win).
+**Confirmed on the owner's host (host 0.3.0, 10 Nov 2026, 10:00 UTC, from its log and the connector):** the host installed `wsproto 1.3.2` and `h11 0.16.0` for homeassistant and swarmui, and
+`pyyaml 6.0.3` for obsidian, in hashed mode, in 3.5 to 3.9 s each, and loaded homeassistant 0.4.3, obsidian 0.4.2 and swarmui 0.1.1. Then, through the connectors:
+`read_base` on a real base returns `parse: ok` with the view summary; Home Assistant `status` says "Area information: available" and `list_areas` returns 16 areas.
+The host's CPU architecture was not stated, so which PyYAML hash it used is not known. SwarmUI live progress was not checked. CI for the commits: green.
 Owner: on the Plugins page fetch and apply the three updates (tick the trust box; the host installs the packages), then reconnect the connector in claude.ai.
 Also noted: host 0.2.0 refuses undeclared tool arguments, which settles the earlier open question about unknown arguments.
 
