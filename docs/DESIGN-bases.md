@@ -58,7 +58,7 @@ was not reachable from the build machine; the help source repository was.
 
 ## 2. Not verified (kept easy to change)
 
-- The view `sort` key. The help page describes sorting in the interface but the syntax page's schema example has no sort key. Phase 1 shows view keys it
+- The view `sort` key. **Seen once on 10 Nov 2026 in two files written by the owner's Obsidian (section 10.2), so no longer unknown, but one sample only.** The help page describes sorting in the interface but the syntax page's schema example has no sort key. Phase 1 shows view keys it
   finds without interpreting them; Phase 2 must not evaluate sort until it is verified on a real `.base` file. Same for view-specific keys of table, cards, list, kanban and map views (their help pages could not be found at the paths tried).
 - Whether the owner's vault really has `.base` entries stored as `newnote` with base64 chunks, and with which chunk splitter. Live check in section 7.
 - How Obsidian resolves a `[[Name.base]]` that matches two files. Phase 1 treats a link as pointing at every base whose path equals the target or ends with `/target` (case-insensitive, NFC), the rule `link_target_matches` already uses for notes.
@@ -162,3 +162,18 @@ Notes in `Test/Projects/`: `Overview.md` (`![[Index.base]]`) and `Bork.md` (`![[
 Observed, existing behaviour, not changed: the older `links:` line (from `parse.py`, which does not mask code) still lists `Only In Code.base`. Only the new `bases:` line and the backlinks ignore code.
 
 Still not exercised on real data: paging across pages and the oversize refusal (need more bases), the `sort` key, a distinctive search word, PyYAML. The build session cannot create `.base` files: the note tools refuse that extension by design and base writing is phase 3.
+
+### 10.2 Second live run (10 November 2026): paging, search and the `sort` key
+
+Plugin on the owner's host was still **0.4.0** (the past-the-end paging header bug was still present), so that line reflects 0.4.0.
+
+| Check | Result |
+| --- | --- |
+| `vault_status` | `bases`: in_vault 4, readable_here 3, not_readable_here 1, `stored_as` `{"newnote": 4}`, `not_served` 0. `documents_by_extension`: md 309, base 4, yaml 3. `unreadable_entries` 0 |
+| Paging, 3 readable bases | `limit 2`: "showing 1 to 2. Use offset 2 for the next page"; `limit 2, offset 2`: "showing 3 to 3", the third base, no repeat. `offset 50`: "showing 0 to 50" (the 0.4.0 bug; 0.4.1 says "none at this offset") |
+| Search word only in a base (`zzqx`, in `Search.base`'s filter) | `search_notes`: 0 notes; `list_notes name ".base"`: 0 notes |
+| `Medical/Index.base` and a missing base | both "No such base." |
+
+Real `.base` text written by Obsidian (two files, version of Obsidian not recorded): a view has `type: table`, `name`, optional `filters` (`and:` list of strings such as `file.name == "zzqx"`), `order` (a list of property names, including `file.*` ones and the vault's own frontmatter names) and `sort`, a list of mappings with `property` and `direction` (`ASC`). The top-level `filters` and `formulas` keys were not present in these samples.
+
+Not exercised: the oversize refusal (the larger base is 802 bytes and the setting cannot go below 1 000; covered by a test only), parsing with PyYAML, and view types other than `table`.
