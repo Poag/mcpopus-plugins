@@ -13,19 +13,28 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled, save_automation (write); delete_automation (admin); list_automations, get_automation_definition (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
 | `swarmui` | see `plugins/swarmui/plugin.toml` | status, models, LoRAs, describe, parameters, images, job status (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | section 12 of the design |
 
+## Packages (host 0.3.0 and later)
+
+The host image carries only what the host itself needs (`mcp`, `starlette`, `uvicorn`, `pydantic`, `cryptography`, `argon2-cffi`, `jinja2`, `httpx2`, `segno`, `pip`).
+A plugin that needs anything else lists exact pins in `requirements` in its `plugin.toml` and sets `min_host_version = "0.3.0"`. In this repository:
+`homeassistant` and `swarmui` list `wsproto` and `h11`; `obsidian` lists `PyYAML`; `email` needs nothing (standard library only). All are hashed and
+wheels only. **To apply an update:** on the host's Plugins page fetch the update and apply it (the host shows the packages first; tick the trust box), then
+reconnect the connector in claude.ai so it re-reads the tool list. The host installs from PyPI (`pypi.org`, `files.pythonhosted.org`).
+`tests/test_requirements.py` checks every manifest with the host's own parser and that no plugin imports a package that is neither the host's nor listed.
+
 ## obsidian: Bases
 
 From 0.4.0 the plugin lists and reads Obsidian Bases (`.base` files): `list_bases` and `read_base` (read, untrusted output). `read_base` returns the raw
 YAML, a summary of its filters, formulas and views, and the notes that embed it; nothing in a base is evaluated. Bases follow the folder policy
 exactly like notes (a blocked base is answered like a missing one), `get_note_metadata` says whether a linked `.base` is found, and `vault_status` gains
-counts by file extension and for bases. The parsed summary needs PyYAML in the host image; without it the raw text is still returned
+counts by file extension and for bases. The parsed summary needs PyYAML, which the plugin lists in its `requirements` and the host installs; if it is missing the raw text is still returned
 ([DESIGN-bases.md](DESIGN-bases.md), sections 7 and 8). Querying a base and writing bases are planned and not built.
 
 ## homeassistant
 
 Read-only view of a Home Assistant home. Entity and domain policy is enforced by the plugin: a hidden entity is absent from every
 search, list, count and summary and is answered exactly like a missing one. Defaults hide locks, alarm panels, cameras, people, device
-trackers and notifiers. Area and device data need the `wsproto` library in the host image (design doc, section 2); without it
+trackers and notifiers. Area and device data need `wsproto`, which the plugin lists in its `requirements` and the host installs (host 0.3.0); without it
 everything else still works. `call_service` (write, 0.2.0) calls one allowed service on one named, allowed entity and returns the state before and after; it is off until
 the owner ticks it, and it needs `allowed_services` and `write_entity_allowlist` as well (design, section 9). Automations can be listed, and triggered, enabled and disabled when they are in a Home Assistant category the owner names (section 9b); definitions can be read, created, replaced and deleted for automations the owner's prefix marks as Claude's, when the token's user is an administrator (recommended: a dedicated user marked local access only) and within a strict subset (section 9c). Needs: the Home Assistant address and a long-lived access token from a dedicated non-administrator user.
 
@@ -35,5 +44,5 @@ Generate images with a SwarmUI (Stable Diffusion) instance, within limits the pl
 owner allows them, models and LoRAs only from the allow and deny lists, size, count, step, rate, queue and concurrency limits, extra
 settings only if the owner lists them. Use a dedicated SwarmUI user with a limited role and its own token; `status` warns if the account
 can do more than the connector needs. Generation and cancel are write tools, off until ticked by name. Claude cannot see the images (the
-host returns text only): results give paths and links. Live progress needs `wsproto` in the host image; without it generation still works.
+host returns text only): results give paths and links. Live progress needs `wsproto`, which the plugin lists in its `requirements`; without it generation still works.
 

@@ -30,7 +30,7 @@ Rules every plugin follows:
    Names are chosen for the connector label the owner sees, so `obsidian`, not `obsidian-livesync`; the storage
    technology belongs in the manifest description.
 2. **Deploy** by copying `plugins/<name>` into the host's plugins volume (or checking out this repository there) and
-   `mcpopus plugins reload <name>`. No image rebuild. A plugin may import only what the host image bundles
+   `mcpopus plugins reload <name>`. No image rebuild. A plugin may import only what the host image bundles (host 0.3.0: see PLUGINS.md, "Packages"; anything else is listed in the plugin's `requirements`)
    (`requirements.lock` in the host repository). A plugin that needs another library changes the host first.
 3. **Read-only first.** A plugin ships with read tools only. Write tools are a separate release, behind their own
    acceptance gate (section 4.9), and are off until the owner enables them by name in the host policy.

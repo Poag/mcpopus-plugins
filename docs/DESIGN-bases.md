@@ -70,7 +70,7 @@ was not reachable from the build machine; the help source repository was.
 | Decision | Reason |
 | --- | --- |
 | New tools `list_bases`, `read_base`; existing tools do not accept `.base` | Existing prompts and tests are undisturbed. Open for the owner: extend instead? |
-| YAML parsed with PyYAML `SafeLoader`, imported lazily; the plugin loads and `list_bases` and raw `read_base` work without it | **The host image has no YAML library** (mcpopus `pyproject.toml` and `requirements.lock`, checked 9 Nov 2026). Without it `read_base` returns the raw text and `parse: unavailable`. The host needs `PyYAML==6.0.3` pinned to give the parsed summary (section 8) |
+| YAML parsed with PyYAML `SafeLoader`, imported lazily; the plugin loads and `list_bases` and raw `read_base` work without it | **The host image has no YAML library** (mcpopus `pyproject.toml` and `requirements.lock`, checked 9 Nov 2026). Since host 0.3.0 the plugin lists `PyYAML==6.0.3` in its own `requirements` (0.4.2) and the host installs it; if it is missing `read_base` returns the raw text and `parse: unavailable` (section 8) |
 | Parse guard before building Python objects: input size cap, node and depth caps, anchors and aliases refused, tags that construct objects refused (SafeLoader), one document only, top level must be a mapping | Billion-laughs expansion and object construction are the two YAML risks. The node tree is checked first, then built |
 | A base larger than `max_base_bytes` (default 100 000) is refused, not cut | A truncated YAML text would mislead a later edit |
 | Bases follow the note folder policy exactly: `blocked_folders` wins, `readable_folders` restricts; blocked equals missing (`No such base.`); absent from lists, counts, links and backlinks | Same rules as section 4.5 of DESIGN.md |
@@ -125,7 +125,7 @@ Do this after updating the plugin to 0.4.0, `blocked_folders = Medical`, and onl
 
 ## 8. What the host needs
 
-- **PyYAML pinned** in mcpopus `pyproject.toml` and `requirements.lock` (and the smoke-test import list), so the parsed summary works. Phase 2 needs it; Phase 1 degrades without it.
+- **Nothing to change in the host** from 10 Nov 2026: host 0.3.0 installs the plugin's `requirements` (PyYAML, hashed for the Python 3.13 image). The owner applies the plugin update on the Plugins page. Phase 2 needs it; Phase 1 degrades without it.
 - Nothing else for Phase 1.
 
 ## 9. Phases 2 and 3

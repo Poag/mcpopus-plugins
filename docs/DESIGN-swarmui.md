@@ -38,7 +38,7 @@ tracks the development branch, so details may differ in the release Alex runs.
 
 **Transport.** HTTP only in the first versions: `GetNewSession`, then `GenerateText2Image` (blocking) run as a background task inside
 the plugin, so the tool can answer within a bounded wait and report progress by job id. This needs no WebSocket library, so no host
-change. A later version may add `GenerateText2ImageWS` for live progress; it needs `wsproto` in the host image, the same dependency the
+change. A later version may add `GenerateText2ImageWS` for live progress; it needs `wsproto` (since host 0.3.0 listed in the plugin's own `requirements`, 0.1.1), the same dependency the
 Home Assistant plugin's area features already need.
 
 **Own HTTP client.** Like the Home Assistant plugin, the plugin builds its own `httpx2.AsyncClient` so it can honour a custom
@@ -212,7 +212,7 @@ Then enable generation: under Policy turn read-only off and tick `generate_image
     other sessions and other users were not interrupted.
 11. Ask for 5 generations in one minute. Expect the per-minute limit message after the 4th.
 12. Untick `generate_image`, reload, and ask again. Expect Claude to say it has no such tool.
-13. Optional (live progress): confirm `status` says "Live progress over WebSocket: on" (needs `wsproto` in the host image) and that a slow
+13. Optional (live progress): confirm `status` says "Live progress over WebSocket: on" (needs `wsproto`, installed by the host from the plugin's `requirements`) and that a slow
     job shows a percentage in `get_generation`. If it says off, everything else still works over plain requests.
 
 ## 13. Decisions needed from Alex

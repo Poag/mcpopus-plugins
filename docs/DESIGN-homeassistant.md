@@ -50,7 +50,7 @@ gain, and the REST history endpoint is the one that applies the user's read perm
 
 ### The host change this needs
 
-Area features need `wsproto` in the host image. Smallest change (in mcpopus, not made here because the brief says to stop and report):
+Area features need `wsproto`. **Since host 0.3.0 (10 Nov 2026) the plugin lists `wsproto==1.3.2` and `h11==0.16.0` in its own `requirements` (0.4.3) and the host installs them; the host image no longer carries `wsproto`.** The earlier host-side option, kept for history:
 add `wsproto==1.3.2` to `dependencies` in `pyproject.toml`, regenerate `requirements.lock`, add `wsproto` to the `cmd_smoke` import list in
 `src/mcpopus/cli.py`. Until then the plugin still works: `status` says area information is unavailable and says why, searching and
 reading entities works without areas, and only the area filter and `list_areas` return an error. The test environment installs
@@ -186,7 +186,7 @@ Every message names a setting or says what to check; none contains the URL, the 
 | Redirect | `Home Assistant redirected the request. Check the base_url setting ...` |
 | Not JSON | `... returned something that is not JSON. Check that base_url points at Home Assistant ...` |
 | Reply too large | `... larger than the max_response_bytes setting allows ...` |
-| Areas unavailable | `Area and device data need the wsproto library, which this host does not have ...` (or the WebSocket variants) |
+| Areas unavailable | `wsproto is missing: install the plugin's packages from its page to get area and device data. Everything else works.` (or the WebSocket variants) |
 | Window too long | `That window is longer than this connector allows (72 hours, the max_history_hours setting).` |
 
 ## 9. Writes (`call_service`, 0.2.0)

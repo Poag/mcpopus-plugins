@@ -3,6 +3,25 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-10: plugins declare their packages (host 0.3.0): homeassistant 0.4.3, swarmui 0.1.1, obsidian 0.4.2
+
+Host 0.3.0 (read from its `docs/PLUGINS.md` "Dependencies" and `src/mcpopus/packages.py` at `origin/main` 1ddb64d) carries only what it needs and installs
+exact-pinned wheels listed in a plugin's `requirements`. Scan of every `.py` file's imports (AST, including `find_spec` names): `email` imports nothing
+outside the standard library and the host's list; `homeassistant` and `swarmui` use `wsproto` only through httpx2's WebSocket client; `obsidian` imports
+`yaml` (the Bases parser from 0.4.0, which the host image never had).
+Now listed, all with `--hash=sha256:` (wsproto and h11 are single pure wheels; PyYAML lists the two cp313 manylinux wheels, x86_64 and aarch64, the host being
+`python:3.13-slim`): homeassistant and swarmui `wsproto==1.3.2`, `h11==0.16.0` (wsproto's dependency; hashed mode needs it listed, and it equals the host's version);
+obsidian `PyYAML==6.0.3`. All three set `min_host_version = "0.3.0"`. `email` unchanged. "Library missing" messages now say "install the plugin's packages from its page".
+Tests: `tests/test_requirements.py` (12): every manifest passes `mcpopus.packages.parse_requirements`; an import outside the host's list or the plugin's own requirements
+fails (mutation-checked: removing PyYAML, a range instead of a pin, and an old `min_host_version` each fail); the pins match the test environment; the host refuses a plugin
+whose packages are not installed. The harness gives the manager a `Packages` object and records the requirements as installed (the test environment already has them).
+Suite: 210 passed, 10 skipped, against the real host 0.3.0.
+Verified once by hand here: the host's own `Packages.install` (pip, `--require-hashes`, wheels only) installed exactly these pins from PyPI for all three plugins on
+linux x86_64, Python 3.13. Not verified: the aarch64 PyYAML hash (taken from PyPI's file list, not installed), loading from the installed directory (the test venv already
+has the packages and host-provided packages win), and an install on the real host.
+Owner: on the Plugins page fetch and apply the three updates (tick the trust box; the host installs the packages), then reconnect the connector in claude.ai.
+Also noted: host 0.2.0 refuses undeclared tool arguments, which settles the earlier open question about unknown arguments.
+
 ## 2026-11-10: obsidian 0.4.1 (first live run of Bases phase 1)
 
 Owner's read-only run on the real vault. Confirmed: `.base` is stored as `newnote` (2 of 2); a blocked base, a missing base and a base in a missing
