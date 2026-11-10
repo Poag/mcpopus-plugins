@@ -11,7 +11,10 @@ from urllib.parse import quote
 from mcpopus.plugin import BaseModel, Field, Plugin, PluginHost, SecretStr, ToolError, tool
 from pydantic import field_validator
 
+import datetime as dt
+
 from .bases import base_links, parse_base, summarise
+from .basequery import SUPPORTED_LINE, Budget, NoSuchView, Unsupported, cell, column_value, plan_base, run_query
 from .couch import Conflict, CouchDB, CouchError
 from .livesync import LiveSyncError, NoteMeta
 from .parse import link_target_matches, snippet
@@ -249,6 +252,70 @@ class Obsidian(Plugin):
             f"modified: {_ts(meta.mtime)}", *summary, f"linked or embedded from ({len(linked)}): {shown or '(none)'}",
             "Computed by mcpopus from the stored file; nothing in the base was evaluated.", "--- raw ---", text,
         ])
+
+    @tool(tier="read", untrusted=True)
+    async def query_base(self, path: str, view: str = "", limit: int = 50, offset: int = 0) -> str:
+        """Work out which notes a base's view would list, and its columns, from the stored files. Computed here, so it may differ from what Obsidian shows. Only a verified subset of the filter language is supported; anything else is refused by name with no rows. view: a view name (default the first); limit and offset page the notes."""
+        view = str(view or "").strip()
+        if len(view) > 100:
+            raise ToolError("View names are limited to 100 characters.")
+        limit = max(1, min(limit if isinstance(limit, int) and not isinstance(limit, bool) else 50, 100))
+        offset = max(0, offset if isinstance(offset, int) and not isinstance(offset, bool) else 0)
+        v = await self._ready()
+        try:
+            meta, text = await v.read_base(path)
+        except (PathError, LiveSyncError, CouchError) as e:
+            raise ToolError(str(e)) from None
+        parsed = await asyncio.to_thread(parse_base, text)
+        if parsed.status != "ok":
+            raise ToolError(f"query_base cannot read this base ({parsed.status}: {parsed.reason}). Nothing was computed.")
+        try:
+            plan = plan_base(parsed.data, view)
+        except NoSuchView as e:
+            raise ToolError(str(e)) from None
+        except Unsupported as e:
+            raise ToolError(f"query_base does not support {e}. Nothing was computed and no rows are returned. {SUPPORTED_LINE}") from None
+        try:
+            records = await v.query_records(plan.uses.text, plan.uses.props)
+        except (PathError, LiveSyncError, CouchError) as e:
+            raise ToolError(str(e)) from None
+        now = dt.datetime.now(dt.timezone.utc)
+        try:
+            result = await asyncio.to_thread(run_query, plan, records, now)
+        except Unsupported as e:
+            raise ToolError(f"query_base does not support {e}. Nothing was computed and no rows are returned. {SUPPORTED_LINE}") from None
+        except Budget:
+            raise ToolError("This query needs more work than allowed. Nothing was computed.") from None
+        page = result.rows[offset: offset + limit]
+        cols = plan.columns
+        sort_text = ", ".join(f"{c.label} {'DESC' if d else 'ASC'}" for c, d in plan.sort) or "none in the base, so path order is used"
+        head = [
+            f"query_base: {meta.path}, view {cell(plan.view_name)!r} (table; {plan.views_total} view(s) in the base)",
+            "Computed by mcpopus from its own index of the stored files. It may differ from what Obsidian shows.",
+            f"Clock: {now.strftime('%Y-%m-%d %H:%M')} UTC (the host clock); every time calculation is in UTC.",
+            "Filters (all must hold): " + (" AND ".join(plan.filter_texts) or "none, so every note"),
+            f"Sort: {sort_text}",
+            "Columns: " + (", ".join(cell(c.label) for c in cols) or "none in the base (only the path is shown)"),
+            SUPPORTED_LINE,
+            f"{result.matched_notes} notes match" + (f"; the view's own limit of {result.limited_to} leaves {len(result.rows)}" if result.limited_to is not None else "")
+            + (f" (showing {offset + 1} to {offset + len(page)})." if page else " (none at this offset)." if result.rows else "."),
+        ]
+        if offset + len(page) < len(result.rows):
+            head.append(f"Use offset {offset + len(page)} for the next page.")
+        if result.other_matching:
+            head.append(f"{result.other_matching} other files (attachments, bases or other non-note files) also match and are not listed; Obsidian would list them.")
+        if result.type_problem_notes:
+            head.append(f"Warning: {result.type_problem_notes} notes had a comparison between values of different types and were treated as not matching.")
+        if result.unreadable_notes:
+            head.append(f"Warning: {result.unreadable_notes} notes could not be read, so the result may be incomplete.")
+        if result.bad_frontmatter_notes:
+            head.append(f"Warning: {result.bad_frontmatter_notes} notes have properties that could not be read; they were treated as having none.")
+        rows = []
+        for rec in page:
+            line = f"- [{rec.path}]({self._link(rec.path)})"
+            cells = [f"{cell(c.label)}: {cell(column_value(c, rec))}" for c in cols]
+            rows.append(line + (" | " + " | ".join(cells) if cells else ""))
+        return "\n".join([*head, *rows])
 
     # --------------------------------------------------------------- writes
     # Off by default twice over: the host policy serves write tools only when the owner turns read-only off and names them,

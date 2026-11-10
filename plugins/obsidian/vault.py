@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import writer
-from .bases import base_links, link_matches_base
+import datetime as _dt
+
+from .bases import base_links, frontmatter_props, link_matches_base
+from .basequery import FileRec
 from .couch import Conflict, CouchDB, CouchError
 from . import crypto
 from .livesync import COMPRESSED_MARK, SYNC_PARAMETERS_ID, NOTE_TYPES, Codec, LiveSyncError, NoteMeta, nfc
@@ -73,7 +76,8 @@ class Vault:
         self._by_id: dict[str, str] = {}
         self.bases: dict[str, NoteMeta] = {}  # NFC path -> meta, for .base files (kept apart from notes)
         self._base_by_id: dict[str, str] = {}
-        self._other: dict[str, str] = {}  # document id -> extension, for documents that are neither notes nor bases
+        self._other: dict[str, NoteMeta] = {}  # document id -> metadata, for documents that are neither notes nor bases (counted and queried, never read)
+        self._props: dict[tuple[str, str], dict | None] = {}
         self._base_links: dict[tuple[str, str], list[str]] = {}
         self.stats = VaultStats()
         self._seq: str | int = 0
@@ -120,7 +124,7 @@ class Vault:
                         self.bases[nfc(meta.path)] = meta
                         self._base_by_id[meta.doc_id] = nfc(meta.path)
                     elif kind == "other":
-                        self._other[key] = extension_of(meta.path)
+                        self._other[key] = meta
                 self._seq = res.get("last_seq", self._seq)
                 if len(batch) < 500:
                     break
@@ -276,9 +280,39 @@ class Vault:
         """Does a link target resolve to a readable base? A blocked base and a missing one both answer False."""
         return any(link_matches_base(target, m.path) for m in self.visible_bases())
 
+    async def query_records(self, need_text: bool, need_props: bool) -> list[FileRec]:
+        """What query_base evaluates: every readable note (with tags, links and properties when the query needs them), plus the readable files that
+        are not notes (counted by the query, never listed). Blocked paths are not in any of it."""
+        def when(ms: int) -> _dt.datetime | None:
+            return _dt.datetime.fromtimestamp(ms / 1000, _dt.timezone.utc) if ms else None
+
+        metas = self.visible()
+        if need_text and len(metas) > self.max_scan_notes:
+            raise PathError(f"This base needs note contents, but {len(metas)} notes are readable, more than the max_scan_notes setting ({self.max_scan_notes}). Raise the setting.")
+        recs = {m.path: FileRec(m.path, True, m.size, when(m.ctime), when(m.mtime)) for m in metas}
+        if need_text:
+            texts = await self.texts(metas)
+            parsed = await self.parsed(metas)
+            if len(self._props) > 20_000:
+                self._props.clear()
+            for m in metas:
+                rec = recs[m.path]
+                if m.path not in texts or m.path not in parsed:
+                    rec.readable, rec.props = False, {}
+                    continue
+                rec.tags, rec.links = list(parsed[m.path].tags), list(parsed[m.path].links)
+                if need_props:
+                    key = (m.doc_id, m.rev)
+                    if key not in self._props:
+                        self._props[key] = await asyncio.to_thread(frontmatter_props, texts[m.path])
+                    rec.props = self._props[key]
+        others = [FileRec(m.path, False, m.size, when(m.ctime), when(m.mtime)) for m in [*self.visible_bases(), *self._other.values()]
+                  if self.policy.allows_path(m.path) and not any(seg.startswith(".") for seg in m.path.split("/"))]  # Obsidian does not list hidden folders
+        return [*recs.values(), *others]
+
     def extension_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for ext in [*(["md"] * len(self.notes)), *(["base"] * len(self.bases)), *self._other.values()]:
+        for ext in [*(["md"] * len(self.notes)), *(["base"] * len(self.bases)), *(extension_of(m.path) for m in self._other.values())]:
             counts[ext] = counts.get(ext, 0) + 1
         ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         shown = dict(ordered[:MAX_EXTENSIONS_SHOWN])
@@ -293,7 +327,7 @@ class Vault:
         for m in self.bases.values():
             types[m.kind] = types.get(m.kind, 0) + 1
         return {"in_vault": len(self.bases), "readable_here": visible, "not_readable_here": len(self.bases) - visible, "stored_as": types,
-                "not_served": sum(1 for e in self._other.values() if e == "base")}
+                "not_served": sum(1 for m in self._other.values() if extension_of(m.path) == "base")}
 
     # ---------------------------------------------------------- diagnostics
     async def diagnose(self) -> dict[str, Any]:

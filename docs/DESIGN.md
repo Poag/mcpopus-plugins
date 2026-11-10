@@ -154,7 +154,7 @@ All `tier="read"`. Output is text; tools that return note content are `untrusted
 
 Dates are UTC (`2026-11-04T09:20`). Paths are vault-relative and end in `.md`.
 
-From 0.4.0 there are also `list_bases` and `read_base` (read, untrusted) for `.base` files, `vault_status` reports file-extension counts and base counts,
+From 0.4.0 there are also `list_bases`, `read_base` and `query_base` (read, untrusted) for `.base` files, `vault_status` reports file-extension counts and base counts,
 and `get_note_metadata` adds a `bases:` line when a note links a `.base`. The note tools above never accept `.base` paths. See [DESIGN-bases.md](DESIGN-bases.md).
 
 Path rules (same as es617's `note-path.ts`): no empty path, no leading `/`, no `..`, no NUL, no `:` (LiveSync's own id

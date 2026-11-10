@@ -84,6 +84,22 @@ def parse_base(text: str) -> ParseResult:
     return ParseResult("ok", data)
 
 
+_FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(?:(.*?)\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.S)
+MAX_FRONTMATTER_CHARS = 65_536
+
+
+def frontmatter_props(text: str) -> dict | None:
+    """The properties at the top of a note: {} if it has none, None if they cannot be read (not valid YAML, too large, refused by the guards)."""
+    m = _FRONTMATTER.match(text)
+    if not m:
+        return {}
+    block = m.group(1) or ""
+    if len(block) > MAX_FRONTMATTER_CHARS:
+        return None
+    result = parse_base(block)
+    return result.data if result.status == "ok" else None
+
+
 # --------------------------------------------------------------------- summary
 def clip(value: Any, limit: int = 200) -> str:
     s = re.sub(r"\s+", " ", str(value)).strip()

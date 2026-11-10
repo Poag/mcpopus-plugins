@@ -3,6 +3,20 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-10: obsidian 0.5.0 (Bases phase 2: query_base, read-only)
+
+Built after the owner's go-ahead. Design first: DESIGN-bases.md section 11 (subset, chosen meanings where the documentation is silent, refusals, live checklist).
+`basequery.py`: a small tokenizer, parser and evaluator (no `eval`; length, node, depth and step budgets), the filter groups, the supported file and note
+properties and functions, date arithmetic in UTC, table views with `order`, `sort` and `limit`, and refusal by name of everything else (formulas, `this`, unlisted functions,
+`groupBy`, `groupOrder`, view `summaries`, other view types, any other view or top-level key). `vault.query_records` builds the rows over the policy-filtered view and
+also the metadata of non-note files, which are counted and never listed. `query_base(path, view, limit, offset)`; the answer states that it is computed by mcpopus and may differ from Obsidian.
+Tests: `tests/test_query_base.py` (125): the evaluator with a fixed clock, the refusal tables, and the tool through the real host manager and fake CouchDB (policy leakage
+including a mutation check, hostile property text, no YAML library, scan bounds, unreadable notes, no writes). Further mutation checks (six edits, each made a test fail):
+`not` as not-all, unknown view keys accepted, blocked other files counted, hidden folders counted, type problems silently false, a path-only test resetting the needs-contents flag.
+Two defects found by the tests and fixed before commit: `file.inFolder` was treated as needing note contents; the depth counter charged every operator level.
+Suite: 335 passed, 10 skipped. **Not run on the real vault.** Unverified against Obsidian (section 11.4): whether `file.name` includes the extension in the owner's Obsidian, equality and
+missing-value rules, default sort, case rules, `today()` and time zones, link and tag matching. CI for this commit not yet seen.
+
 ## 2026-11-10: plugins declare their packages (host 0.3.0): homeassistant 0.4.3, swarmui 0.1.1, obsidian 0.4.2
 
 Host 0.3.0 (read from its `docs/PLUGINS.md` "Dependencies" and `src/mcpopus/packages.py` at `origin/main` 1ddb64d) carries only what it needs and installs
