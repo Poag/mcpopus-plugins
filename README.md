@@ -34,6 +34,22 @@ the trust box. Open the plugin's page to fill in its settings (secrets are store
 `https://<your host>/<plugin>` as a custom connector in claude.ai. Full walk-through: [docs/GUIDE_CLAUDE.md](docs/GUIDE_CLAUDE.md).
 Plugins run inside the host process and are trusted code: read a plugin before you install it.
 
+## Plugins that need Python packages
+
+A plugin can list the packages it needs in `plugin.toml` instead of asking you to add them to the host image:
+
+```toml
+min_host_version = "0.3.0"
+requirements = ["icalendar==6.1.0"]
+```
+
+Entries must be exact pins (`name==version`, optionally with `--hash=sha256:...`). The host (0.3.0 and later) installs them, as wheels only,
+when you install the plugin from a source (the install form lists them and the trust box covers them), when you apply an update that changes
+them, or from the plugin's page. They live in the host's data volume, never in the image, and a package the host already provides cannot be
+replaced. The host needs outbound access to PyPI for this. Rules and limits: the host's
+[PLUGINS.md](https://github.com/Poag/mcpopus/blob/main/docs/PLUGINS.md#dependencies) and
+[SECURITY.md](https://github.com/Poag/mcpopus/blob/main/docs/SECURITY.md#packages-requested-by-plugins).
+
 ## Develop
 
 ```bash

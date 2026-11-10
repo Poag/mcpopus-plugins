@@ -17,7 +17,7 @@ Self-hosted LiveSync plugin to a CouchDB you can reach from the host.
 ## 2. Install the plugin
 
 1. Open **Plugins**, then the **Plugin sources** section. The default source is this repository.
-2. Press **Fetch**, then **Install** next to `obsidian`, and tick **I trust this code**. The code runs inside the host, so read it first
+2. Press **Fetch**, then **Install** next to `obsidian`, and tick **I trust this code**. If the plugin lists Python packages, the table shows them and the box reads "I trust this code and its packages"; the host installs them as part of the install. The code runs inside the host, so read it first
    (there is a **browse the code** link).
 3. The plugin appears on **Home** as a card, status `unloaded` or `error` until it is configured.
 
