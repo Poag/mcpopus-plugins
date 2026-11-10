@@ -6,7 +6,7 @@ later check what a base would show, and, only if the owner opts in, write them. 
 | Phase | Plugin version | Adds | State |
 | --- | --- | --- | --- |
 | 1 | 0.4.0, 0.4.1 | `list_bases`, `read_base` (read); `.base` counts in `vault_status`; base links resolve in `get_note_metadata` | built, tested against fakes, not yet run on the real vault |
-| 2 | 0.5.0 | `query_base` (read): what a base would show, from a verified subset | built, tested against fakes, not yet run on the real vault (section 11) |
+| 2 | 0.5.1 | `query_base` (read): what a base would show, from a verified subset | built; first live run 10 Nov 2026 (`file.name` corrected in 0.5.1); checklist items 2 to 4 still open (section 11) |
 | 3 | later | `write_base`, `edit_base` (write, off by default) | not started; waits for the owner to confirm phases 1 and 2 |
 
 Existing tools keep their names and behaviour. `.base` paths are never accepted by `read_note`, `write_note` and the other note tools.
@@ -196,7 +196,7 @@ proposed on 10 Nov 2026 ("Start phase 2").
 | --- | --- |
 | Views | `type: table` only. View keys: `type`, `name`, `filters`, `order`, `sort`, `limit` (all seen in the syntax page or in real files, sections 1.1 and 10.2). Top level: `filters`, `formulas`, `properties`, `summaries`, `views`; `formulas` and `summaries` may be defined but not used |
 | Filters | a string, or `and` / `or` / `not` groups of strings and groups; global and view filters joined with AND (documented). `not` means none of the entries is true (documented: "None of the following are true") |
-| File properties | `file.name` (with extension), `file.basename`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`; `file.tags` as a column |
+| File properties | `file.name` (without extension, verified live), `file.basename`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`; `file.tags` as a column |
 | Note properties | frontmatter, as `x`, `note.x` or `note["x"]`; values are typed (text, number, true/false, list, date) |
 | File functions | `file.hasTag("a", "b")` (any of; nested tags included), `file.inFolder("f")` (sub-folders included), `file.hasLink("x")`, `file.hasProperty("p")` |
 | Global functions | `now()`, `today()`, `date("YYYY-MM-DD")` and `date("YYYY-MM-DD HH:mm:ss")` |
@@ -220,7 +220,7 @@ what was found and that nothing was computed.
 | Question | Choice here | Visible in the result |
 | --- | --- | --- |
 | Which files are rows | Obsidian lists every file; this index has Markdown notes with contents, and the names, sizes and times of other files. **Only notes are listed.** The same filter is also evaluated on the other files (using file properties only) and their number is reported | "N other files also match and are not listed" |
-| `file.name` | includes the extension (`Note.md`), as the File type table says (`basename` is without it) | stated in the supported list |
+| `file.name` | **Corrected in 0.5.1:** excludes the extension (verified by the owner on 10 Nov 2026: `file.name == "zzqx"` listed `zzqx.md`). For non-note files unverified; the same rule is used | |
 | Missing value in `<`, `>`, `<=`, `>=` | false, as JavaScript | not flagged |
 | Equality | text, numbers (not true/false), dates compare by value; `null == null`; a missing value equals only `null`; **different types never equal** (JavaScript's loose `"5" == 5` is not applied) | a comparison across types is not matched and the number of notes this happened to is reported |
 | Relational with mixed types, arithmetic on mismatched types, a number or text used as a true/false | not matched, counted as above | "N notes had a comparison between values of different types and were treated as not matching" |

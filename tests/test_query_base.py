@@ -85,7 +85,7 @@ def as_filter(expr, r=None):
     ('file.hasLink("Other")', {}, False),
     ('file.hasProperty("price")', {"price": 1}, True),
     ('file.hasProperty("price")', {}, False),
-    ('file.name == "a.md" && file.basename == "a" && file.ext == "md" && file.folder == "Q" && file.path == "Q/a.md" && file.size == 100', {}, True),
+    ('file.name == "a" && file.basename == "a" && file.ext == "md" && file.folder == "Q" && file.path == "Q/a.md" && file.size == 100', {}, True),
 ])
 def test_expressions(expr, props, expected):
     assert evaluate(expr, rec(props=props)) is expected
@@ -276,7 +276,7 @@ async def test_filter_columns_sort_and_the_report(couch, tmp_path):
         assert "7 notes match (showing 1 to 7)." in text and "1 other files" in text and "Q/scan.pdf" not in text  # the attachment is counted, never named
         assert "Computed by mcpopus" in text and "UTC" in text and "Supported:" in text and "Sort: price ASC" in text
         assert "Warning: 1 notes have properties that could not be read" in text
-        assert "file.name: alpha.md | status: done | price: 3 |" in text  # file.name includes the extension
+        assert "file.name: alpha | status: done | price: 3 |" in text  # file.name has no extension (verified live)
         err, text = await query(c, "T/all.base", limit=2, offset=2)
         assert names(text) == ["Q/beta.md", "Q/sub/delta.md"] and "showing 3 to 4" in text and "Use offset 4 for the next page." in text
 

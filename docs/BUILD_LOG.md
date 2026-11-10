@@ -30,6 +30,10 @@ Everything in Prompt A and B against the real Home Assistant (waits for the owne
 1. The 10 Nov settings change (7 services on `light.*` earlier, 0 after the update): intended or reset?
 2. Use an explicit write list (outside and inside porch) instead of `light.*`, so the nursery light can never be a target?
 
+## 2026-11-10: obsidian 0.5.1 (first live run of query_base: `file.name` has no extension)
+
+Live run on the owner's vault with plugin 0.5.0 (read-only, plus one fixture note `Test/zzqx.md`, created and deleted). Results: `Index.base` (no filters) listed 307 notes, equal to the readable notes, with 6 other files counted (4 bases + 3 yaml minus the blocked base), so the blocked folder is in no count; `Search.base` was refused by name for `file.backlinks` until the owner trimmed its columns, then ran (0 notes, header correct); `Large.base` refused as over `max_base_bytes`. The `zzqx` check: the plugin said 0 notes, the owner's Obsidian listed `zzqx.md`, so **`file.name` excludes the extension**; section 11.4's first choice was wrong. Fix: `file_value` returns the basename for `file.name` (filters, columns and sort); tests changed to match, and putting the old behaviour back fails two tests (mutation check). Suite: 335 passed, 10 skipped (local). Not verified: `file.name` for non-note files (same rule used), checklist items 2 to 4 (`inFolder`, property and tag filters, `mtime`), a direct query of the Medical base (declined by the session's classifier; blocked equals missing is shown by the counts instead).
+
 ## 2026-11-10: obsidian 0.5.0 (Bases phase 2: query_base, read-only)
 
 Built after the owner's go-ahead. Design first: DESIGN-bases.md section 11 (subset, chosen meanings where the documentation is silent, refusals, live checklist).

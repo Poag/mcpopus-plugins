@@ -486,7 +486,8 @@ class Ctx:
 def file_value(rec: FileRec, name: str) -> Any:
     if name == "tags":
         return list(rec.tags)
-    return {"name": rec.name, "basename": rec.basename, "path": rec.path, "folder": rec.folder, "ext": rec.ext,
+    # Verified live 10 Nov 2026: file.name has no extension (a base filtering file.name == "zzqx" listed zzqx.md)
+    return {"name": rec.basename, "basename": rec.basename, "path": rec.path, "folder": rec.folder, "ext": rec.ext,
             "size": rec.size, "ctime": rec.ctime, "mtime": rec.mtime}[name]
 
 
