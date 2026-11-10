@@ -6,7 +6,7 @@ later check what a base would show, and, only if the owner opts in, write them. 
 | Phase | Plugin version | Adds | State |
 | --- | --- | --- | --- |
 | 1 | 0.4.0, 0.4.1 | `list_bases`, `read_base` (read); `.base` counts in `vault_status`; base links resolve in `get_note_metadata` | built, tested against fakes, not yet run on the real vault |
-| 2 | later | `query_base` (read): what a base would show, from a verified subset | not started |
+| 2 | 0.5.0 | `query_base` (read): what a base would show, from a verified subset | built, tested against fakes, not yet run on the real vault (section 11) |
 | 3 | later | `write_base`, `edit_base` (write, off by default) | not started; waits for the owner to confirm phases 1 and 2 |
 
 Existing tools keep their names and behaviour. `.base` paths are never accepted by `read_note`, `write_note` and the other note tools.
@@ -177,3 +177,89 @@ Plugin on the owner's host was still **0.4.0** (the past-the-end paging header b
 Real `.base` text written by Obsidian (two files, version of Obsidian not recorded): a view has `type: table`, `name`, optional `filters` (`and:` list of strings such as `file.name == "zzqx"`), `order` (a list of property names, including `file.*` ones and the vault's own frontmatter names) and `sort`, a list of mappings with `property` and `direction` (`ASC`). The top-level `filters` and `formulas` keys were not present in these samples.
 
 Not exercised: the oversize refusal (the larger base is 802 bytes and the setting cannot go below 1 000; covered by a test only), parsing with PyYAML, and view types other than `table`.
+
+## 11. Phase 2: `query_base` (0.5.0)
+
+Goal: Claude cannot see Obsidian's rendering, so `query_base` works out which notes a base's chosen view would list, and with which columns, from the plugin's own
+index. It is read tier, untrusted output, and runs over the same policy-filtered view as every other tool. The rule from the brief: only constructs that are documented
+or seen in a real file are evaluated; **anything else is refused by name and no rows are returned, never a partial or guessed result.** The owner confirmed the subset
+proposed on 10 Nov 2026 ("Start phase 2").
+
+### 11.1 Tool
+
+`query_base(path, view="", limit=50, offset=0)`: `path` ends in `.base`; `view` is a view name (default: the first view, as Obsidian does for an embed); `limit`
+1 to 100 and `offset` page through the matches. Needs PyYAML to read the base (otherwise refused, saying why).
+
+### 11.2 What is evaluated (the subset)
+
+| Area | Supported |
+| --- | --- |
+| Views | `type: table` only. View keys: `type`, `name`, `filters`, `order`, `sort`, `limit` (all seen in the syntax page or in real files, sections 1.1 and 10.2). Top level: `filters`, `formulas`, `properties`, `summaries`, `views`; `formulas` and `summaries` may be defined but not used |
+| Filters | a string, or `and` / `or` / `not` groups of strings and groups; global and view filters joined with AND (documented). `not` means none of the entries is true (documented: "None of the following are true") |
+| File properties | `file.name` (with extension), `file.basename`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`; `file.tags` as a column |
+| Note properties | frontmatter, as `x`, `note.x` or `note["x"]`; values are typed (text, number, true/false, list, date) |
+| File functions | `file.hasTag("a", "b")` (any of; nested tags included), `file.inFolder("f")` (sub-folders included), `file.hasLink("x")`, `file.hasProperty("p")` |
+| Global functions | `now()`, `today()`, `date("YYYY-MM-DD")` and `date("YYYY-MM-DD HH:mm:ss")` |
+| Operators | `== != < > <= >=`, `&& \|\| !`, `+ - * / %`, parentheses; `null`, `true`, `false`, numbers, quoted text |
+| Dates | a date plus or minus a duration text such as `"1 week"` or `"36h"` (units: seconds, minutes, hours, days, weeks), and the fields `.year .month .day .hour .minute .second`, and `.date()` |
+| Text and list methods | `contains`, `containsAll`, `containsAny`, `startsWith`, `endsWith`, `isEmpty`, `lower`, `trim`, and `.length` |
+| Columns | the view's `order` list: file properties above and note properties |
+| Sort | the view's `sort` list of `property` and `direction` (`ASC`, `DESC`), first entry most important (documented for the interface; the YAML shape is from real files) |
+| `limit` | the view's own limit is applied after sorting and reported |
+
+### 11.3 Refused, by name, with no rows
+
+Formulas (`formula.x`, as a filter, column or sort), `this`, any function or method not listed (`if`, `link`, `list`, `number`, `min`, `max`, `format`, `relative`, `replace`,
+`split` and so on), regular expressions, `file.backlinks`, `file.links`, `file.embeds`, `file.properties`, `file.fullname` (seen in a real file, meaning not documented),
+`file.tags` inside a filter (use `file.hasTag`), year and month durations (calendar arithmetic), subtracting two dates, `groupBy`, `groupOrder`, view `summaries`, view types other than
+`table`, any other view key, any other top-level key, empty filter groups, expressions over 1000 characters or 300 nodes, and anything the parser cannot read. Each refusal says
+what was found and that nothing was computed.
+
+### 11.4 Meaning chosen where the documentation is silent (all **unverified against Obsidian**)
+
+| Question | Choice here | Visible in the result |
+| --- | --- | --- |
+| Which files are rows | Obsidian lists every file; this index has Markdown notes with contents, and the names, sizes and times of other files. **Only notes are listed.** The same filter is also evaluated on the other files (using file properties only) and their number is reported | "N other files also match and are not listed" |
+| `file.name` | includes the extension (`Note.md`), as the File type table says (`basename` is without it) | stated in the supported list |
+| Missing value in `<`, `>`, `<=`, `>=` | false, as JavaScript | not flagged |
+| Equality | text, numbers (not true/false), dates compare by value; `null == null`; a missing value equals only `null`; **different types never equal** (JavaScript's loose `"5" == 5` is not applied) | a comparison across types is not matched and the number of notes this happened to is reported |
+| Relational with mixed types, arithmetic on mismatched types, a number or text used as a true/false | not matched, counted as above | "N notes had a comparison between values of different types and were treated as not matching" |
+| Text comparison and sort | exact and case-sensitive for `==`, `contains`; sort uses case-folded text | |
+| Dates | all arithmetic in **UTC**; `today()` is midnight UTC; a date property without a time is midnight UTC; the host clock is used and shown | the header states the clock time and "UTC" |
+| Sort when the base has none | path order | "no sort in the base: path order" |
+| Sort with missing values | missing values last, both directions | |
+| `hasLink` | matches a link in the note by name or path suffix, like the plugin's backlinks | |
+| `hasTag` | case-insensitive, `#` ignored, nested tags match | |
+| Notes whose contents cannot be read | evaluated as having no tags, links or properties **and reported** | "N notes could not be read; the result may be incomplete" |
+| Frontmatter that is not valid YAML | treated as no properties, reported | "N notes have frontmatter that could not be read" |
+| `inFolder` | case-insensitive | |
+
+### 11.5 Policy and safety
+
+- Only readable notes are evaluated. A blocked note is not a row, is not counted (not even among the "other files"), contributes nothing to tags, links or sort order, and a `hasLink` is evaluated on the text of readable notes only. A blocked base answers `No such base.`
+- The expression language has its own small parser and evaluator. Nothing is run with `eval`; the length, depth, node and step budgets are enforced and a query that exceeds them is refused.
+- Frontmatter is read with the safe YAML loader under the same guards as bases (no aliases, no object tags, size and depth caps).
+- Property values come from notes, so everything is returned inside the untrusted wrapper, each cell clipped. Error messages quote only identifiers (letters, digits, `_`, `.`), clipped, never base text.
+- Notes' contents are fetched only when the query needs tags, links or properties; a query needing contents on more than `max_scan_notes` readable notes is refused rather than cut.
+- Output is capped (100 rows a page, cells clipped to 100 characters).
+
+### 11.6 Result header
+
+Every result states: it was computed by mcpopus and may differ from Obsidian; the clock and UTC; the filters as understood; the sort; the supported constructs (one line); counts (matches,
+shown, other files, warnings).
+
+### 11.7 Live checklist (owner), after updating to 0.5.0
+
+1. `query_base` on `Test/Projects/Search.base` (filter `file.name == "zzqx"`): expect 0 notes and the header. Then make a note named exactly `zzqx.md` under `Test`: **if it does not match, `file.name` excludes the extension in your Obsidian**, and 11.4's first row is wrong; tell me.
+2. A base with `file.inFolder("Test")`: compare the listed notes with the same base opened in Obsidian. Differences in order or in attachments are expected and shown in the header.
+3. A base filtering on a frontmatter property and on a tag: compare the counts.
+4. A base with `file.mtime > now() - "7 days"`: compare with Obsidian; note the time zone difference near midnight.
+5. A base filtering on `file.inFolder("Medical")`, or a note in `Medical` that matches a filter: expect it nowhere, not even in a count.
+6. A base using a formula or `groupBy`: expect a refusal naming it.
+7. Check nothing changed in the vault.
+
+### 11.8 Open decisions for the owner
+
+- Whether to accept strict refusal of unknown view keys (it will refuse bases carrying display keys we have not seen, for example column widths; send a sample and the key is added once verified).
+- Whether to list non-note rows (attachments, bases) by name, which widens what Claude can see; for now they are only counted.
+- Whether `groupBy` should be applied in a later version (it changes the order and arrangement of rows, so it is refused now).
