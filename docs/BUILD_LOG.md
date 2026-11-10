@@ -3,6 +3,13 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-10: obsidian 0.4.1 (first live run of Bases phase 1)
+
+Owner's read-only run on the real vault. Confirmed: `.base` is stored as `newnote` (2 of 2); a blocked base, a missing base and a base in a missing
+folder answer alike; path rules; counts. Found: `list_bases` said "showing 0 to 2" for an offset past the end; fixed with a test that fails on the old code.
+Four steps of my test prompt were wrong (write tools are allowed by the owner's policy; one readable base cannot show paging; the embedding note was empty;
+the search word occurred in a note). Link resolution is still untested live. Details: DESIGN-bases.md section 10. CI for this commit not yet seen.
+
 ## 2026-11-09: obsidian 0.4.0 (Bases phase 1, read-only)
 
 Brief: let Claude see and maintain Obsidian Bases (`.base`), in three phases with stops. This is phase 1. Design: [DESIGN-bases.md](DESIGN-bases.md).

@@ -1,4 +1,4 @@
 name = "obsidian"
-version = "0.4.0"
+version = "0.4.1"
 description = "Obsidian vault over a Self-hosted LiveSync (CouchDB): read, search, list, tags, links, Bases (.base) files; folder-limited writes when enabled."
 min_host_version = "0.1.0"

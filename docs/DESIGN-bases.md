@@ -5,7 +5,7 @@ later check what a base would show, and, only if the owner opts in, write them. 
 
 | Phase | Plugin version | Adds | State |
 | --- | --- | --- | --- |
-| 1 | 0.4.0 | `list_bases`, `read_base` (read); `.base` counts in `vault_status`; base links resolve in `get_note_metadata` | built, tested against fakes, not yet run on the real vault |
+| 1 | 0.4.0, 0.4.1 | `list_bases`, `read_base` (read); `.base` counts in `vault_status`; base links resolve in `get_note_metadata` | built, tested against fakes, not yet run on the real vault |
 | 2 | later | `query_base` (read): what a base would show, from a verified subset | not started |
 | 3 | later | `write_base`, `edit_base` (write, off by default) | not started; waits for the owner to confirm phases 1 and 2 |
 
@@ -131,3 +131,18 @@ Do this after updating the plugin to 0.4.0, `blocked_folders = Medical`, and onl
 ## 9. Phases 2 and 3
 
 Planned in the brief, not designed here yet. Phase 2 starts only after the live checks above and after the sort key and view keys are verified against a real `.base`. Phase 3 needs the write path for non-note documents read from the library (a `newnote` document with base64 chunks and a binary-typed entry), an extended interop job, and the owner's confirmation of phases 1 and 2.
+
+## 10. Live results (owner, 10 November 2026, plugin 0.4.0, read-only tools)
+
+Vault: 306 notes, 2 bases (one in `Medical`, blocked), 3 `.yaml` files.
+
+| Step | Result | Note |
+| --- | --- | --- |
+| 2 `vault_status` | pass | `bases`: `in_vault` 2, `readable_here` 1, `not_readable_here` 1, `stored_as` `{"newnote": 2}`, `not_served` 0. **Section 1.2 is confirmed on this vault: a `.base` file is a `newnote` document.** The totals match the owner's screenshot; the count from Obsidian's own search was not made |
+| 4, 5, 6, 7, 11 | pass | Folder and name filters; `Medical` folder answers "No such folder."; the blocked base, a missing base and a base in a missing folder all answer "No such base."; path-rule errors; no `bases:` line on a note without base links. The one readable base parsed as `unavailable` (no PyYAML in the host) and its raw text is a view with `type` and `name` only |
+| 3 paging | **bug found, fixed in 0.4.1** | With one base, `offset 2` said "showing 0 to 2". It now says "none at this offset". Paging with a real next page was not exercised: the vault has one readable base |
+| 1, 8, 9, 10 | prompt errors, not plugin faults | Step 1 forbade write tools in the list, but the owner has ticked them in the host policy for this connector. Steps 8 and 9 need a note that links the base; `Test/Projects/Overview.md` is empty. Step 10 used "PyYAML", which a note legitimately contains; the match was a note, not the base |
+
+Still unverified after this run: link resolution (`found` / `not found`) and the "linked or embedded from" list against real data; paging across pages; the view `sort` key (the base has no sort); the oversize refusal on real data; behaviour with PyYAML installed.
+
+Corrections to the live prompt: step 1 should check that `list_bases` and `read_base` exist and are read-only, not that no write tool exists; step 3 needs at least three readable bases; steps 8 and 9 need a note containing `![[Index.base]]` and one containing `![[Missing.base]]`; step 10 should search for a word that occurs only in a base.

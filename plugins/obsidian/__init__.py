@@ -223,7 +223,8 @@ class Obsidian(Plugin):
         hits = [m for m in v.visible_bases() if self._in_folder(m.path, folder) and (not name or name.casefold() in m.path.casefold())]
         hits.sort(key=lambda m: (-m.mtime, m.path.casefold()))
         page = hits[offset: offset + limit]
-        head = f"{len(hits)} bases (showing {offset + 1 if page else 0} to {offset + len(page)})."
+        shown = f"showing {offset + 1} to {offset + len(page)}" if page else ("none at this offset" if hits else "none")
+        head = f"{len(hits)} bases ({shown})."
         if offset + len(page) < len(hits):
             head += f" Use offset {offset + len(page)} for the next page."
         return "\n".join([head, *(f"- {_ts(m.mtime)} [{m.path}]({self._base_open_link(m.path)}) ({m.size} bytes)" for m in page)])

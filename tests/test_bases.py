@@ -157,6 +157,10 @@ async def test_paging_and_filters(couch, tmp_path):
         assert "5 bases (showing 1 to 2). Use offset 2 for the next page." in text
         _, text = await call(c, "list_bases", {"limit": 2, "offset": 4})
         assert "(showing 5 to 5)." in text and "next page" not in text
+        _, text = await call(c, "list_bases", {"offset": 50})  # found on the live run: this used to say "showing 51 to 50"
+        assert "5 bases (none at this offset)." in text and "next page" not in text
+        _, text = await call(c, "list_bases", {"name": "no-such-base"})
+        assert "0 bases (none)." in text
         _, text = await call(c, "list_bases", {"folder": "Many", "name": "b3"})
         assert "1 bases (showing 1 to 1)." in text and "Many/b3.base" in text
         assert (await call(c, "list_bases", {"folder": "../x"}))[0] is True
