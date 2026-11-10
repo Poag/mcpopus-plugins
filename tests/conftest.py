@@ -64,6 +64,22 @@ async def couch():
         yield fake
 
 
+def mark_requirements_installed(packages, name: str, requirements: list[str]) -> None:
+    """Record a plugin's requirements as installed. The test environment already has these packages importable (requirements-dev.txt),
+    so no pip runs here; the host's own checks still run when the plugin loads (a package at a different version from the host's is refused).
+    The real installation is the host's job; see docs/BUILD_LOG.md for the one-off check made against PyPI."""
+    import json
+
+    from mcpopus.packages import normalise
+
+    if not requirements:
+        return
+    dists = {normalise(r.split("==")[0]): r.split("==")[1].split()[0] for r in requirements}
+    where = packages.dir_for(name, requirements)
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "installed.json").write_text(json.dumps({"requirements": requirements, "dists": dists}))
+
+
 @contextlib.asynccontextmanager
 async def running_plugin(tmp_path: Path, name: str, values: dict, secrets: dict | None = None, policy=None, plugins_dir: Path = PLUGINS):
     """Load a plugin with the real mcpopus manager and yield (MCP client, LoadedPlugin, audit path)."""
@@ -83,9 +99,20 @@ async def running_plugin(tmp_path: Path, name: str, values: dict, secrets: dict 
         stats = Stats(Store(tmp_path / "stats.db"))
     except ImportError:
         stats = None
-    mgr = PluginManager(plugins_dir, tmp_path / "data", configs, audit, **({"stats": stats} if stats else {}))
+    extra = {"stats": stats} if stats else {}
+    packages = None
+    try:  # hosts from 0.3.0 install a plugin's `requirements` and refuse to load it until they are installed
+        from mcpopus.packages import Packages
+
+        packages = Packages(tmp_path / "data", enabled=False)
+        extra["packages"] = packages
+    except ImportError:
+        pass
+    mgr = PluginManager(plugins_dir, tmp_path / "data", configs, audit, **extra)
     mgr.stats = stats
     mgr.discover()
+    if packages is not None:
+        mark_requirements_installed(packages, name, mgr.requirements(name))
     await mgr.load(name)
     lp = mgr.get(name)
     try:

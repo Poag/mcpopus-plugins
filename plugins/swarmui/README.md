@@ -9,4 +9,10 @@ inputs or output locations.
 
 Make a dedicated SwarmUI user whose role holds only generation, model, history and status permissions, and use its token. Generation and
 cancel are write tools: tick them under Policy to turn them on. Claude cannot see the generated images; results give paths and links.
-Live progress needs the wsproto library in the host image; without it everything still works.
+
+## Packages
+
+`plugin.toml` lists `wsproto==1.3.2` and `h11==0.16.0` (hashed, wheels only) under `requirements`, and `min_host_version = "0.3.0"`. The host installs
+them when you add or update the plugin (after you tick the trust box) or from the plugin's page. They give live progress over SwarmUI's WebSocket
+(httpx2's WebSocket client imports `wsproto`). If they are missing the plugin does not load; if the import still fails, `status` says live
+progress is off and why, and generation still works.

@@ -255,7 +255,7 @@ class Swarm:
             if isinstance(e, SwarmError):
                 raise e from None
             if isinstance(e, ImportError):
-                raise SwarmError("Live progress needs the wsproto library, which this host does not have. Turn off progress_updates.") from None
+                raise SwarmError("wsproto is missing: install the plugin's packages from its page, or turn off progress_updates.") from None
             if isinstance(e, (TimeoutError, asyncio.TimeoutError)):
                 raise SwarmError("SwarmUI did not finish in time (the job_timeout_seconds setting).") from None
             self._log.warning("swarmui websocket failed: %s", type(e).__name__)

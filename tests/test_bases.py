@@ -270,7 +270,7 @@ async def test_without_a_yaml_library_the_raw_text_is_shown(couch, tmp_path, mon
     monkeypatch.setitem(sys.modules, "yaml", None)  # `import yaml` now raises ImportError, as in the host image
     async with running_plugin(tmp_path, "obsidian", values(couch), SECRETS) as (c, _, _):
         err, text = await call(c, "read_base", {"path": "Idx.base"})
-        assert not err and "parse: unavailable (this host has no YAML library" in text and DOCS_EXAMPLE in text and "summary:" not in text
+        assert not err and "parse: unavailable (PyYAML is missing: install the plugin's packages from its page" in text and DOCS_EXAMPLE in text and "summary:" not in text
         assert (await call(c, "list_bases"))[0] is False
 
 

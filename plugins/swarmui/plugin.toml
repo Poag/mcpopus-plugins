@@ -1,4 +1,8 @@
 name = "swarmui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Generate images with a SwarmUI (Stable Diffusion) instance and look at its models, parameters and history. Generation is off until the owner enables it; prompts, models and sizes are limited by the plugin."
-min_host_version = "0.1.0"
+min_host_version = "0.3.0"
+requirements = [
+  "wsproto==1.3.2 --hash=sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584",
+  "h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+]

@@ -57,7 +57,7 @@ def parse_base(text: str) -> ParseResult:
     try:
         import yaml
     except ImportError:
-        return ParseResult("unavailable", reason="this host has no YAML library (PyYAML), so only the raw text is shown")
+        return ParseResult("unavailable", reason="PyYAML is missing: install the plugin's packages from its page; only the raw text is shown")
     loader = yaml.SafeLoader(text)
     try:
         node = loader.get_single_node()

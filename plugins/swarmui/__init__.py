@@ -49,7 +49,7 @@ class Config(BaseModel):
     max_per_hour: int = Field(30, ge=1, le=500, description="Most generations started per hour")
     wait_seconds: int = Field(45, ge=5, le=120, description="How long generate_image waits for the images before returning a job id to check later")
     job_timeout_seconds: int = Field(600, ge=30, le=3600, description="Longest a generation is waited for before it is interrupted and marked failed")
-    progress_updates: bool = Field(True, description="Use SwarmUI's WebSocket for live progress when the host supports it (needs the wsproto library); otherwise a plain request is used")
+    progress_updates: bool = Field(True, description="Use SwarmUI's WebSocket for live progress when wsproto is installed (the plugin lists it in its packages); otherwise a plain request is used")
     max_results: int = Field(20, ge=1, le=100, description="Most models or images listed per call")
     instructions: str = Field("", max_length=4000, description="Text shown to the AI client with this connector (which models to prefer, how you like prompts). Do not put secrets here")
     timeout_seconds: int = Field(20, ge=3, le=120, description="Seconds to wait for SwarmUI on ordinary requests")
@@ -212,7 +212,7 @@ class SwarmUIPlugin(Plugin):
             f"Limits: {cfg.max_images_per_call} image(s) per call, {cfg.max_pixels} pixels, {cfg.max_steps} steps, {cfg.max_per_minute} a minute, {cfg.max_per_hour} an hour, "
             f"{cfg.max_concurrent_jobs} at once, queue at most {cfg.max_queue}. Prompt syntax with <...> is {'allowed' if cfg.allow_prompt_syntax else 'refused'}.",
             f"Model policy: {len(cfg.model_allowlist)} allow pattern(s); {len(cfg.model_denylist)} deny pattern(s).",
-            f"Live progress over WebSocket: {'on' if ws_ok else 'off (the host lacks the wsproto library, or progress_updates is off)'}. Generations running from this connector: {running}.",
+            f"Live progress over WebSocket: {'on' if ws_ok else 'off (wsproto is missing: install the packages from the plugin page; or progress_updates is off)'}. Generations running from this connector: {running}.",
             "Generation is only available if the owner ticked generate_image under Policy. Images are not shown to Claude: results give file paths" + (" and links." if cfg.public_url else "; set public_url to get links."),
         ]
         return "\n".join(lines)

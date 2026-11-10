@@ -311,7 +311,7 @@ class HomeAssistant:
             if isinstance(e, HAError):
                 raise e from None
             if isinstance(e, ImportError):
-                raise RegistryUnavailable("Area and device data need the wsproto library, which this host does not have (see the plugin's design doc). Everything else works.") from None
+                raise RegistryUnavailable("wsproto is missing: install the plugin's packages from its page to get area and device data. Everything else works.") from None
             if isinstance(e, TimeoutError):
                 raise RegistryUnavailable("Home Assistant did not answer the area and device request in time.") from None
             self._log.warning("home assistant registry read failed: %s", type(e).__name__)

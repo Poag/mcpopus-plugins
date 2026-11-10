@@ -13,5 +13,10 @@ Automations can be listed, triggered (conditions respected), enabled and disable
 If the token's user is an administrator (use a dedicated one, marked local access only in Home Assistant) it can also read automation definitions and create, replace or delete automations whose id starts with a prefix (default `claude_`), within a strict subset and starting disabled.
 
 Everything it returns came from Home Assistant, so it is marked untrusted. Create the access token on a dedicated non-administrator
-Home Assistant user, and revoke it there to cut access. Area data needs the `wsproto` library in the host image; without it, everything
-else still works.
+Home Assistant user, and revoke it there to cut access. 
+## Packages
+
+`plugin.toml` lists `wsproto==1.3.2` and `h11==0.16.0` (hashed, wheels only) under `requirements`, and `min_host_version = "0.3.0"`. The host installs
+them when you add or update the plugin (after you tick the trust box) or from the plugin's page. They are used for the WebSocket that reads areas,
+devices and automation categories (httpx2's WebSocket client imports `wsproto`). If they are missing the plugin does not load; if the import still
+fails, area data says "wsproto is missing: install the plugin's packages from its page" and everything else works.
