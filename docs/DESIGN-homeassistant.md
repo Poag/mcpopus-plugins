@@ -3,7 +3,7 @@
 Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.4.0. Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
 (`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
-built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d.
+built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d. The definition tools were run live on 10 November 2026 (section 11); section 10f is the corrected second run.
 
 ## 1. Goal
 
@@ -381,7 +381,121 @@ like it was ignored. Check, in order: the plugin page shows no error after Save 
 was refused, naming the setting, which is how this was found); and `status` shows a recent "settings were loaded" time (added in 0.4.1). Write and admin tools such as
 `delete_automation` are also only served after the owner turns read-only off and ticks each by name under Policy and saves the policy.
 
+## 10f. Second live run of the definition and automation tools (corrected, real values)
+
+Written 10 November 2026 after the first definition run (section 11). Every entity below was looked up through the connector that day. The lesson from earlier
+runs applies: each refusal case must change exactly **one** thing from a valid definition, and every other part must be allowed, or the plugin
+refuses it for an earlier reason and the rule under test is never reached. The checks run in this order inside `build_config`:
+id prefix, alias/description/mode, list sizes, trigger types and fields, trigger entities, action service (against `allowed_services`), action entity
+(visible and exists), service domain, write list, templates in data, target keys and other entities in data, self-trigger, "needs a service action",
+and last the conditions. The name-clash check comes after all of those.
+
+**Settings to enter first (owner).** On 10 November `status` showed `call_service` with 0 services allowed and no write patterns, whereas earlier that day it allowed 7 on
+`light.*`. Whether that was intended is an open question (see below). For this run enter, one per line: `allowed_services` = `light.turn_on`, `light.turn_off`;
+`write_entity_allowlist` = `light.outside_porch`, `light.inside_porch` (an explicit list rather than `light.*`, which would include `light.nursery_light`);
+`automation_categories` = `claude`. In Home Assistant make sure a category named **Claude** exists (Settings, Automations, Categories) and put **no** existing
+automation in it (all eight are in Car, System, Hoover or Lights today). Under Policy turn read-only off, tick `save_automation`, `delete_automation`,
+`trigger_automation`, `set_automation_enabled`, and set all four to Needs approval. Run it in daytime: the test automation switches the outside porch light on for
+10 seconds, and that light is off now, so it ends as it began.
+
+Real values used: trigger sensor `binary_sensor.ev6_back_left_door` (a door sensor, off); light it acts on `light.outside_porch`; a visible light not on the write list
+`light.lights_red_light`; a visible entity in the wrong domain `switch.ev6_charge_port`; a hidden entity `person.vicki` (person domain denied); a real
+automation name for the clash test `Inside porch light - day, evening, night`; a real automation outside the category `automation.hoover_at_11am_when_house_is_quiet`.
+
+### Prompt A (paste into claude.ai with the connector on)
+
+```
+Test the homeassistant connector. Use only the values written here. For every step report: the step, what you called, the reply (verbatim for refusals), and PASS or FAIL against "Expect". Do not skip a step, do not stop at a failure, and never retry a refusal with different values.
+
+PART 1, read only
+1. status. Expect: version 0.4.3, area information available, call_service "2 service(s) allowed" and 2 entity patterns, categories claude.
+2. list_services. Expect: light.turn_on and light.turn_off, targets light.outside_porch and light.inside_porch.
+3. list_automations. Expect: 8 automations, none starting claude_, all "controllable: no".
+4. get_automation_definition for automation.inside_porch_light_day_evening_night. Expect either a definition or "No definition available." Report which; no pass or fail.
+
+PART 2, refusals. Each uses save_automation unless stated, and must be refused. For all of them except where I say otherwise, the base definition is: automation_id claude_refusal_test, alias "Claude refusal test", triggers [{"type":"state","entity_id":"binary_sensor.ev6_back_left_door","to":"on"}], actions [{"service":"light.turn_on","entity_id":"light.outside_porch"}]. Change ONLY what is stated.
+5. automation_id "porch_refusal_test". Expect: must start with claude_.
+6. delete_automation with automation_id "inside_porch_light_day_evening_night". Expect: the same claude_ prefix refusal (not "No such automation.").
+7. action service "light.toggle". Expect: not on the owner's allowed_services list.
+8. action service "lock.unlock" with entity_id "lock.front_door". Expect: the same allowed_services message as step 7.
+9. action entity_id "person.vicki". Expect: "does not exist or is not available".
+10. action entity_id "light.does_not_exist". Expect: the same wording as step 9 apart from the entity id.
+11. action entity_id "light.lights_red_light". Expect: "not on the write list".
+12. action service "light.turn_on" with entity_id "switch.ev6_charge_port". Expect: must be in the same domain as the service.
+13. action data {"brightness":"{{ 50 }}"}. Expect: template refused.
+14. action data {"transition":"light.inside_porch"}. Expect: data may not refer to other entities.
+15. action data {"area_id":"lights"}. Expect: data may not name targets.
+16. trigger entity_id "light.outside_porch" (the same light the action changes). Expect: could trigger itself.
+17. trigger {"type":"event","event_type":"call_service"}. Expect: each trigger needs a type (state, numeric_state, time, time_pattern, sun).
+18. actions [{"delay":"02:00:00"},{"service":"light.turn_on","entity_id":"light.outside_porch"}]. Expect: delay longer than allowed.
+19. conditions [{"type":"template","value_template":"{{ true }}"}]. Expect: each condition needs a type.
+20. automation_id claude_refusal_name, alias "Inside porch light - day, evening, night". Expect: an automation with that name already exists.
+21. list_automations. Expect: still 8 automations and none starting claude_ (nothing from steps 5 to 20 was created).
+
+PART 3, create and read back
+22. save_automation: automation_id claude_porch_test, alias "Claude porch test", description "Live test, safe to delete", mode single, triggers [{"type":"state","entity_id":"binary_sensor.ev6_back_left_door","to":"on"}], actions [{"service":"light.turn_on","entity_id":"light.outside_porch"},{"delay":"00:00:10"},{"service":"light.turn_off","entity_id":"light.outside_porch"}]. Expect: Created, entity automation.claude_porch_test, starts DISABLED.
+23. get_automation_definition automation.claude_porch_test. Expect: the same triggers and the three actions, config id claude_porch_test, initial_state false.
+24. list_automations. Expect: 9 automations; automation.claude_porch_test "controllable: no" (it has no category yet).
+Then STOP and tell me: "In Home Assistant, put Claude porch test in the category Claude (Settings, Automations, select it, Add to category). Do NOT enable it. Reply done." Wait for me to reply "done".
+
+PART 4, after I say done (the connector caches category data for 60 seconds, so wait a full minute after my reply before step 25)
+25. list_automations with category "Claude". Expect: exactly automation.claude_porch_test, "controllable: yes". Then list_automations without a filter: the other 8 all "controllable: no".
+26. save_automation again with the same id and the same definition, but the first action gets data {"brightness":128}. Expect: Updated; initial_state kept as the owner set it. Then list_automations with category "Claude" again. Expect: it is still there and still "controllable: yes" (the update did not drop its category).
+27. set_automation_enabled automation.claude_porch_test enabled true. Expect: after state "on".
+28. trigger_automation automation.claude_porch_test. Approve. Wait 15 seconds, then get_entity light.outside_porch and get_logbook for light.outside_porch for the last hour. Expect: the light turned on and, about 10 seconds later, off (it ends off); the logbook shows those two changes; no output contains any field starting "context_".
+29. save_automation again, same as step 26, adding conditions [{"type":"state","entity_id":"binary_sensor.ev6_back_left_door","state":"on"}] (the door is closed, so the condition is false). Then trigger_automation automation.claude_porch_test. Wait 15 seconds, then get_history of light.outside_porch for the last hour. Expect: no new on/off change after the trigger (the condition was respected).
+30. set_automation_enabled automation.claude_porch_test enabled false. Expect: after state "off".
+
+PART 5, the fence
+31. save_automation: automation_id claude_uncategorised_test, alias "Claude uncategorised test", the same triggers and three actions as step 22. Expect: Created, DISABLED. It stays in NO category.
+32. list_automations. Expect: automation.claude_uncategorised_test "controllable: no" even though its id starts with claude_.
+33. trigger_automation automation.claude_uncategorised_test. Expect: "may not control that automation".
+34. set_automation_enabled automation.claude_uncategorised_test enabled true. Expect: "may not control that automation".
+35. set_automation_enabled automation.hoover_at_11am_when_house_is_quiet enabled true (it is already on, so nothing changes even if this were wrongly allowed). Expect: "may not control that automation".
+36. trigger_automation automation.does_not_exist. Expect: "No such entity."
+37. set_automation_enabled with entity_id light.outside_porch enabled true. Expect: must be an automation.
+38. get_entity automation.claude_uncategorised_test. Expect: state off and last_triggered empty (it never ran).
+
+PART 6, clean-up
+39. delete_automation claude_porch_test, then delete_automation claude_uncategorised_test. Approve both. Expect: both deleted.
+40. list_automations. Expect: the original 8 only. get_entity light.outside_porch: off.
+Finish with a table of all 40 steps and a list of anything that surprised you. Do not call any tool not named above.
+```
+
+What each part proves, and what it does not: part 2 reaches one rule per case (steps 5 to 20 are each isolated by construction); part 4 is the first live use of
+`trigger_automation` and `set_automation_enabled`, with the category fence and with conditions respected (step 29); the 60 second wait before step 25 is real: the registry cache (`REGISTRY_TTL`) would otherwise show the old category. The refusal cases of part 2 and the fence cases of part 5 are replayed on every test run by `tests/test_homeassistant_live_prompt.py` against a fake that mirrors this home, so the prompt cannot drift from the code. Part 5 confirms that a `claude_` id is **not** itself
+permission to run an automation: the category is the control (section 9b). If steps 33 to 35 are not refused, stop and report: that is a defect in the fence.
+
+### Prompt B (entity pattern rule; separate run, because it changes settings)
+
+Before: note the counts from `list_areas` for Lights and Car, and the number of results of `search_entities` with domain `binary_sensor` and query `EV6 Back Right`. Then set
+`entity_denylist` = `light.lights_red_light` and `binary_sensor.ev6_back_right_*` (one per line), save and reload, and paste:
+
+```
+Test the homeassistant connector's entity patterns. Report each step with PASS or FAIL against "Expect", and do not call any tool not named.
+1. get_entity light.lights_red_light, then get_entity sensor.this_does_not_exist. Expect: both reply exactly "No such entity."
+2. get_states for light.lights_red_light, light.outside_porch. Expect: red light "not found", outside porch listed.
+3. search_entities query "Red Light". Expect: no Red Light in the results.
+4. search_entities domain binary_sensor query "EV6 Back Right". Expect: no results (it was non-zero before).
+5. get_entity binary_sensor.ev6_back_left_door. Expect: works (the glob only matches back_right).
+6. get_history of light.lights_red_light for 1 hour, and get_logbook of binary_sensor.ev6_back_right_door for 1 hour. Expect: both answer "No history found" / "No logbook entries" in the same words as for a missing entity.
+7. list_areas. Expect: Lights has one fewer entity than before, Car has fewer by the number of back-right sensors found before.
+```
+
+Then remove both patterns, reload, and confirm step 1 now returns the red light. Not part of either prompt: a revoked-token check (the owner revokes the token in Home Assistant; `status` should show the refusal,
+then a 60 second pause) and `entity_allowlist`; both are still unverified live.
+
+### Open questions for the owner
+
+1. The settings difference on 10 November (7 services on `light.*` earlier in the day, 0 services and no patterns after the update): was that intended, or did the update reset them?
+2. Should the write list be the explicit list above instead of `light.*`, so the nursery light can never be a target? It is currently `unavailable` in Home Assistant.
+
 ## 11. Live check results
+
+10 November 2026, plugin 0.4.x on Alex's host, definition tools, by the 12-step prompt: steps 1 to 7 and 9 to 11 passed (read a definition, create, read back, update, delete, the prefix rule, clean-up).
+Step 8 (ten refusal cases) proved only seven rules: a lock service, `light.toggle` and a switch entity were refused by the service allow-list or the write list before they reached the rule under
+test (the prompt used values that were not allowed). Step 12 (`trigger_automation` and `set_automation_enabled` cannot reach an automation outside the allowed category) was not confirmed: no category data was
+available then. Later that day the host installed `wsproto` and `list_areas` returned 16 areas. Section 10f repeats both with real values.
 
 7 November 2026, plugin 0.1.0 on Alex's host against his real Home Assistant, through a claude.ai connector, by the 18-step prompt.
 No step failed. Verified live: status (version, token works, domain list without the denied domains, no count of hidden items); paged

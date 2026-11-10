@@ -3,6 +3,33 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-10: homeassistant hand-over, corrected live checklist (no plugin change, still 0.4.3)
+
+Took over the plugin. CI green on `main` (bb0f98a, run 33). 71 homeassistant and requirements tests pass locally against host 0.3.0. No behaviour change, so no version bump.
+
+### Found, through the connector (read tools only)
+
+- `status`: Home Assistant 2026.11.0, plugin 0.4.3, area information available, 674 visible entities. `call_service` allows **0 services and 0 patterns**; `automation_categories` is `claude`.
+- `list_automations`: 8 automations, **none in a category called Claude** (they are in Car, System, Hoover and Lights), so none is controllable. Nothing named `claude_` exists, so the 10 Nov clean-up held.
+- `list_areas`: 16 areas. Real entities for the tests were looked up (design section 10f): `binary_sensor.ev6_back_left_door`, `light.outside_porch`, `light.inside_porch`, `light.lights_red_light`, `light.nursery_light` (unavailable), `switch.ev6_charge_port`.
+- Reading the code showed why step 8 failed to test three rules: `build_config` checks the service against `allowed_services` first, then the entity, then the domain, then the write list. A case only reaches a later rule if everything earlier is allowed. Step 12 had also been framed wrongly: the category, not the `claude_` prefix, is what lets an automation be triggered or switched (design 9b), so a `claude_` automation outside the category must be refused.
+- The registry (areas, categories) is cached for 60 seconds, so a category assigned in Home Assistant can show as "controllable: no" for a minute.
+
+### Added
+
+- Design section 10f: settings to enter, real values, **Prompt A** (40 steps: read-only checks, 16 isolated refusal cases, create and read back, a pause for the owner to put one test automation in the Claude category, update, enable, trigger, a false condition, the fence on an uncategorised `claude_` automation, clean-up) and **Prompt B** (entity deny patterns on a real light and a real glob). Section 11 now records the 10 Nov results.
+- `tests/test_homeassistant_live_prompt.py` (3 tests): replays the prompt's refusal and fence cases against a fake that mirrors this home, with the settings the checklist asks for. It asserts the message each case must reach, that the base definition and the later valid definitions are accepted (otherwise every refusal could pass for the wrong reason), and that nothing reaches Home Assistant.
+- Mutation checks, each made a test fail and was restored: write list ignored; service allow-list ignored; domain match ignored; template in data allowed; self-trigger allowed; delay cap removed; prefix fence loosened; category fence opened; name clash ignored. Removing only the `visible()` check in `Context.entity` is survived, because `save_automation` already passes only visible states (two layers); removing both makes the test fail.
+
+### Not verified
+
+Everything in Prompt A and B against the real Home Assistant (waits for the owner). The revoked-token check and `entity_allowlist` live. Whether a disabled automation can be triggered by `automation.trigger` (the prompt enables it first). Whether an update through `save_automation` keeps the automation's category (a real-data check in step 26).
+
+### Open for the owner
+
+1. The 10 Nov settings change (7 services on `light.*` earlier, 0 after the update): intended or reset?
+2. Use an explicit write list (outside and inside porch) instead of `light.*`, so the nursery light can never be a target?
+
 ## 2026-11-10: obsidian 0.5.0 (Bases phase 2: query_base, read-only)
 
 Built after the owner's go-ahead. Design first: DESIGN-bases.md section 11 (subset, chosen meanings where the documentation is silent, refusals, live checklist).
