@@ -118,6 +118,13 @@ class FakeHA:
         self.ws_attempts = 0
         self.categories = [{"category_id": "cat_claude", "name": "Claude"}, {"category_id": "cat_other", "name": "Other"}]
         self.categories_supported = True
+        self.helper_categories = [{"category_id": "cat_helpers_claude", "name": "Claude"}, {"category_id": "cat_helpers_other", "name": "Other"}]
+        self.helper_create_calls: list[dict] = []  # every input_boolean/create the fake accepted
+        self.helper_registry_misses = 0  # how many entity_registry/get calls fail before a new helper appears in the registry
+        self.helper_update_fails = False
+        self.helper_create_error: str | None = None  # an error code to answer input_boolean/create with
+        self._helper_polls: dict[str, int] = {}
+        self.helper_force_suffix = False  # Home Assistant picks a different id than the one implied by the name (a clash)
         self.delay = 0.0
         self.status_override: int | None = None
         self.body_override: bytes | None = None
@@ -267,9 +274,47 @@ class FakeHA:
                 kind = msg.get("type")
                 self.ws_commands.append(kind)
                 lists = {"config/area_registry/list": self.areas, "config/device_registry/list": self.devices, "config/entity_registry/list": self.reg_entities}
-                if kind == "config/category_registry/list":
-                    ok = self.categories_supported and msg.get("scope") == "automation"
-                    await ws.send_json({"id": msg["id"], "type": "result", "success": ok, "result": self.categories} if ok
+                if kind == "input_boolean/create":
+                    self.writes.append(f"WS {kind}")
+                    if not self.token_is_admin or self.helper_create_error:
+                        await ws.send_json({"id": msg["id"], "type": "result", "success": False, "error": {"code": self.helper_create_error or "unauthorized", "message": "Unauthorized"}})
+                        continue
+                    base = "".join(ch if ch.isalnum() else " " for ch in str(msg.get("name", "")).lower()).split()
+                    item_id, n = "_".join(base), 1
+                    if self.helper_force_suffix:
+                        item_id += "_2"
+                    while f"input_boolean.{item_id}" in self.states:
+                        n += 1
+                        item_id = "_".join(base) + f"_{n}"
+                    self.helper_create_calls.append({k: v for k, v in msg.items() if k not in ("id",)})
+                    self.states[f"input_boolean.{item_id}"] = st(f"input_boolean.{item_id}", "on" if msg.get("initial") else "off", friendly_name=msg.get("name"), editable=True)
+                    self._helper_polls[f"input_boolean.{item_id}"] = self.helper_registry_misses
+                    await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": {"id": item_id, "name": msg.get("name"), "initial": msg.get("initial", False)}})
+                elif kind == "config/entity_registry/get":
+                    eid = msg.get("entity_id")
+                    if self._helper_polls.get(eid, 0) > 0:
+                        self._helper_polls[eid] -= 1
+                        entry = None
+                    else:
+                        entry = next((e for e in self.reg_entities if e["entity_id"] == eid), None)
+                        if entry is None and eid in self._helper_polls:
+                            entry = {"entity_id": eid, "area_id": None, "device_id": None, "categories": {}}
+                            self.reg_entities.append(entry)
+                    await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": entry} if entry else
+                                       {"id": msg["id"], "type": "result", "success": False, "error": {"code": "not_found", "message": "Entity not found"}})
+                elif kind == "config/entity_registry/update":
+                    self.writes.append(f"WS {kind}")
+                    entry = next((e for e in self.reg_entities if e["entity_id"] == msg.get("entity_id")), None)
+                    if not self.token_is_admin or entry is None or self.helper_update_fails:
+                        await ws.send_json({"id": msg["id"], "type": "result", "success": False, "error": {"code": "unauthorized" if not self.token_is_admin else "not_found", "message": "no"}})
+                    else:
+                        entry.setdefault("categories", {}).update(msg.get("categories", {}))
+                        await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": {"entity_entry": entry}})
+                elif kind == "config/category_registry/list":
+                    scope = msg.get("scope")
+                    ok = self.categories_supported and scope in ("automation", "helpers")
+                    result = self.helper_categories if scope == "helpers" else self.categories
+                    await ws.send_json({"id": msg["id"], "type": "result", "success": ok, "result": result} if ok
                                        else {"id": msg["id"], "type": "result", "success": False, "error": {"code": "unknown_command", "message": "no"}})
                 elif kind in lists:
                     await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": lists[kind]})

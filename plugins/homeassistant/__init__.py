@@ -19,7 +19,7 @@ from pydantic import field_validator, model_validator
 
 from . import text as tx
 from .automations import ID_BODY, Context, DefinitionError, build_config, definition_problem
-from .client import HAError, HomeAssistant, RegistryUnavailable, Settings, check_base_url, ssl_context
+from .client import HAError, HelperRefused, HomeAssistant, RegistryUnavailable, Settings, check_base_url, ssl_context
 from .policy import ENTITY_RE, SERVICE_RE, EntityPolicy, check_service_data, domain_of, norm_glob, writable
 
 DEFAULT_DENIED_DOMAINS = ["lock", "alarm_control_panel", "camera", "person", "device_tracker", "notify"]
@@ -51,6 +51,8 @@ class Config(BaseModel):
     write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.* or input_boolean.doorbell_chime). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
     automation_categories: list[str] = Field([], description="Automations in these Home Assistant categories (names, one per line) may be triggered, enabled and disabled by the automation tools. Empty means none, except automations matching write_entity_allowlist")
     automation_id_prefix: str = Field("claude_", description="Automations this connector creates, edits or deletes must have a config id starting with this. Human-written automations never do, so they cannot be changed or deleted")
+    helper_id_prefix: str = Field("claude_", description="create_helper names new helpers with this prefix (1 to 20 lower-case letters, digits and underscores, starting with a letter). The entity is input_boolean.<prefix><helper_id>")
+    helper_category: str = Field("", description="Name of an existing Home Assistant helper category that create_helper puts new helpers in (create it first under Settings, Devices and services, Helpers). Empty means create_helper refuses")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -83,6 +85,22 @@ class Config(BaseModel):
         v = v.strip() if isinstance(v, str) else v
         if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,19}", v):
             raise ValueError("must be 1 to 20 characters: lower-case letters, digits and underscores, starting with a letter, for example claude_")
+        return v
+
+    @field_validator("helper_id_prefix", mode="before")
+    @classmethod
+    def _helper_prefix(cls, v):
+        v = v.strip() if isinstance(v, str) else v
+        if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9]*(_[a-z0-9]+)*_?", v) or len(v) > 20:
+            raise ValueError("must be 1 to 20 characters: lower-case letters, digits and single underscores, starting with a letter, for example claude_")
+        return v
+
+    @field_validator("helper_category", mode="before")
+    @classmethod
+    def _helper_category(cls, v):
+        v = v.strip() if isinstance(v, str) else v
+        if isinstance(v, str) and (len(v) > 80 or _CTRL.search(v)):
+            raise ValueError("must be a category name of up to 80 characters with no control characters")
         return v
 
     @field_validator("ca_certificate")
@@ -257,6 +275,9 @@ class HomeAssistantPlugin(Plugin):
             "Automations Claude may trigger or switch: " + (f"categories {', '.join(cfg.automation_categories)}" if cfg.automation_categories else "no category set")
             + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
+        lines.append("Helpers Claude may create: "
+                     + (f"input_boolean helpers named input_boolean.{cfg.helper_id_prefix}<name>, in the helper category {tx.clean(cfg.helper_category, 80)}. Only if the owner ticked create_helper under Policy, and the token's user is an administrator."
+                        if cfg.helper_category else "none (the helper_category setting is empty)."))
         if cfg.entity_allowlist:
             lines.append("Allow list note: entity_allowlist is the READ filter. Because it is set, every entity that does not match it is hidden, including the ones an automation would watch; "
                          "to let Claude change an entity use write_entity_allowlist instead, and leave entity_allowlist empty unless you want to hide the rest of the home."
@@ -674,6 +695,55 @@ class HomeAssistantPlugin(Plugin):
         if stats is not None:
             stats.count("automation_deletes", 1)
         return f"Deleted automation {cid}. Home Assistant rewrites automations.yaml, so comments in that file are not kept."
+
+    # ---------------------------------------------------------------- helpers
+    @tool(tier="write")
+    async def create_helper(self, helper_id: str, initial: bool = False) -> str:
+        """Create one on/off helper (an input_boolean) named with the owner's prefix and put it in the owner's helper category. helper_id is the name after the prefix, for example doorbell_chime (lower-case letters, digits and single underscores, up to 40). initial is whether it starts on (default off). It does not become something Claude may change until the owner allows it. Needs the token's user to be an administrator."""
+        cfg = self.ctx.config
+        if not cfg.helper_category:
+            raise ToolError("Creating helpers is not set up: the owner has not named a helper category in the helper_category setting.")
+        if not isinstance(initial, bool):
+            raise ToolError("initial must be true or false.")
+        hid = str(helper_id or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", hid) or len(hid) > 40:
+            raise ToolError(f"helper_id is 1 to 40 lower-case letters, digits and single underscores, with none at the start or end (for example doorbell_chime). "
+                            f"The helper will be input_boolean.{cfg.helper_id_prefix}<helper_id>.")
+        name = cfg.helper_id_prefix + hid
+        eid = f"input_boolean.{name}"
+        if not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", name) or not ENTITY_RE.fullmatch(eid):
+            raise ToolError("The helper_id_prefix setting and that helper_id do not make a valid name.")
+        rule = self.policy.hidden_by(eid)
+        if rule:  # the answer depends on the new id and the settings only; a helper Claude could not see would be pointless
+            raise ToolError(f"{eid} would be hidden by the {'domain_denylist' if rule == 'domain' else 'entity_denylist' if rule == 'deny' else 'entity_allowlist'} setting, "
+                            "so Claude could not see or use it. Nothing was created. Change that setting first.")
+        if any(st["entity_id"] == eid for st in await self._guard(self.ha.states(fresh=True))):
+            raise ToolError("A helper or entity with that id already exists, or cannot be created. Choose a different helper_id.")
+        self._take_write_slot()
+        try:
+            made = await self._guard(self.ha.create_helper(name, initial, cfg.helper_category))
+        except HelperRefused as e:
+            raise ToolError(str(e)) from None
+        self.ctx.logger.info("helper created: %s (category %s)", made["entity_id"], "assigned" if made["categorised"] else "NOT assigned")
+        stats = getattr(self.ctx, "stats", None)
+        if stats is not None:
+            stats.count("helpers_created", 1)
+        shown = made["entity_id"]
+        lines = [f"Created the helper {shown} ({'on' if initial else 'off'} to start)."]
+        if shown != eid:
+            lines.append(f"Note: Home Assistant named it {shown}, not {eid} as asked (a name clash). Check it in Home Assistant.")
+        if made["categorised"]:
+            lines.append(f"It is in the helper category {tx.clean(cfg.helper_category, 80)}.")
+        elif made["registered"]:
+            lines.append(f"It was created but Home Assistant would not put it in the helper category {tx.clean(cfg.helper_category, 80)}. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
+        else:
+            lines.append("It was created but had not appeared in Home Assistant's entity registry yet, so it is not in a category. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
+        if writable(self.policy, self.write_allow, shown):
+            lines.append("It matches write_entity_allowlist, so an allowed service can change it.")
+        else:
+            lines.append("It does not match write_entity_allowlist, so Claude cannot change it or use it in an automation action yet. To allow that, the owner adds "
+                         f"{shown} (or input_boolean.{cfg.helper_id_prefix}*) to write_entity_allowlist and the services to allowed_services.")
+        return "\n".join(lines)
 
     def _brief(self, s: dict) -> str:
         attrs = s.get("attributes") if isinstance(s.get("attributes"), dict) else {}

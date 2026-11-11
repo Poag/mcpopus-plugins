@@ -1,8 +1,8 @@
 """Home Assistant access: REST for states, history, logbook and services; WebSocket for the area, device and entity registries.
 
 Why two transports (design doc, section 2): the REST API has no registry endpoints, and the only REST way to learn an entity's area
-is the template endpoint, which this plugin never uses. The registry lists are read-only WebSocket commands. Nothing here sends a
-write; the one POST route Home Assistant offers for service calls arrives with the write tools in a later phase.
+is the template endpoint, which this plugin never uses. The registry lists are read-only WebSocket commands. The only WebSocket write is
+create_helper (one session: create an input_boolean and put it in a category); everything else that changes anything is a REST call.
 
 Messages raised as HAError are safe to show the model: they name a setting, never the URL, the token or anything Home Assistant said.
 """
@@ -10,6 +10,7 @@ Messages raised as HAError are safe to show the model: they name a setting, neve
 from __future__ import annotations
 
 import asyncio
+import re
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -23,10 +24,15 @@ REGISTRY_TTL = 60.0
 REGISTRY_RETRY = 20.0
 SERVICES_TTL = 30.0
 AUTH_PAUSE = 60.0
+HELPER_WAIT = 3.0  # how long create_helper waits for the new entity to appear in the registry
 
 
 class HAError(Exception):
     """A failure whose message is safe to show."""
+
+
+class HelperRefused(HAError):
+    """create_helper stopped before creating anything (for example the category does not exist)."""
 
 
 class RegistryUnavailable(HAError):
@@ -116,6 +122,12 @@ class HomeAssistant:
         self._admin_blocked_until = time.monotonic() + AUTH_PAUSE
         return HAError("Home Assistant refused the automation config call. The automation definition tools need the token's user to be an administrator "
                        "(Home Assistant's automation config API is administrator-only), or the token may have been revoked. Everything else still works. "
+                       f"These calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
+
+    def _helper_refused(self) -> HAError:
+        self._admin_blocked_until = time.monotonic() + AUTH_PAUSE
+        return HAError("Home Assistant refused the helper command. Creating a helper and putting it in a category need the token's user to be an administrator, "
+                       "or the token may have been revoked. Everything else still works. "
                        f"These calls are paused for {int(AUTH_PAUSE)} seconds so that repeated failures do not get this host banned.")
 
     async def _get_json(self, path: str, params: dict[str, str] | None = None, *, missing_ok: bool = False) -> Any:
@@ -252,6 +264,90 @@ class HomeAssistant:
             elif isinstance(svc, list):
                 out[item["domain"]] = {k: {} for k in svc if isinstance(k, str)}
         self._services = (time.monotonic(), out)
+        return out
+
+    # --------------------------------------------------------------- helpers
+    async def create_helper(self, name: str, initial: bool, category_name: str) -> dict[str, Any]:
+        """Create one input_boolean and put it in a helper category, in one WebSocket session. The caller has validated every argument against the policy.
+
+        Nothing is changed if the category is not found. Afterwards the result says whether the entity appeared in the registry and whether the category was assigned."""
+        self._blocked()
+        if time.monotonic() < self._admin_blocked_until:
+            raise self._helper_refused()
+        s: Settings = self._get()
+        ws_url = ("wss://" if s.base_url.startswith("https://") else "ws://") + s.base_url.split("://", 1)[1] + "/api/websocket"
+        counter = 0
+        create_sent = False
+        out: dict[str, Any] = {"item_id": "", "entity_id": "", "registered": False, "categorised": False}
+
+        async def command(ws, payload: dict[str, Any]) -> tuple[bool, Any, str]:
+            nonlocal counter
+            counter += 1
+            await ws.send_json({"id": counter, **payload})
+            while True:
+                msg = await ws.receive_json(timeout=s.timeout)
+                if isinstance(msg, dict) and msg.get("type") == "result" and msg.get("id") == counter:
+                    err = msg.get("error") if isinstance(msg.get("error"), dict) else {}
+                    return bool(msg.get("success")), msg.get("result"), str(err.get("code", ""))
+
+        try:
+            async with asyncio.timeout(s.timeout * 5 + HELPER_WAIT):
+                async with self._http.websocket(ws_url, max_message_size_bytes=s.max_response_bytes, keepalive_ping_interval_seconds=None) as ws:
+                    hello = await ws.receive_json(timeout=s.timeout)
+                    if not isinstance(hello, dict) or hello.get("type") != "auth_required":
+                        raise HAError("Home Assistant's WebSocket did not start as expected. Check the base_url setting.")
+                    await ws.send_json({"type": "auth", "access_token": s.token})
+                    reply = await ws.receive_json(timeout=s.timeout)
+                    if not isinstance(reply, dict) or reply.get("type") == "auth_invalid":
+                        raise self._refused()
+                    if reply.get("type") != "auth_ok":
+                        raise HAError("Home Assistant's WebSocket did not accept the connection.")
+                    ok, cats, _ = await command(ws, {"type": "config/category_registry/list", "scope": "helpers"})
+                    if not ok or not isinstance(cats, list):
+                        raise HelperRefused("Home Assistant would not list its helper categories, so nothing was created. This version of Home Assistant may not have helper categories.")
+                    wanted = category_name.casefold()
+                    cat_id = next((c["category_id"] for c in cats if isinstance(c, dict) and isinstance(c.get("category_id"), str)
+                                   and str(c.get("name") or "").casefold() == wanted), None)
+                    if cat_id is None:
+                        raise HelperRefused("No helper category with the name in the helper_category setting exists in Home Assistant, so nothing was created. "
+                                            "Create it first (Settings, Devices and services, Helpers, then the category filter), or check the setting.")
+                    create_sent = True
+                    ok, item, code = await command(ws, {"type": "input_boolean/create", "name": name, "initial": initial})
+                    if not ok:
+                        if code in ("unauthorized", "forbidden"):
+                            raise self._helper_refused()
+                        raise HAError("Home Assistant would not create the helper (it rejected the name or the fields). Nothing was created.")
+                    item_id = item.get("id") if isinstance(item, dict) else None
+                    if not isinstance(item_id, str) or not re.fullmatch(r"[a-z0-9_]{1,128}", item_id):
+                        raise HAError("Home Assistant created something but its reply was not understood. Check Home Assistant's helpers before trying again.")
+                    out["item_id"], out["entity_id"] = item_id, f"input_boolean.{item_id}"
+                    for _ in range(int(HELPER_WAIT / 0.5)):  # the entity is added a moment after the item is stored
+                        ok, entry, _ = await command(ws, {"type": "config/entity_registry/get", "entity_id": out["entity_id"]})
+                        if ok and isinstance(entry, dict):
+                            out["registered"] = True
+                            break
+                        await asyncio.sleep(0.5)
+                    if out["registered"]:
+                        ok, _, _ = await command(ws, {"type": "config/entity_registry/update", "entity_id": out["entity_id"], "categories": {"helpers": cat_id}})
+                        out["categorised"] = bool(ok)
+        except Exception as e0:  # noqa: BLE001 - the WebSocket client raises groups of exceptions; classify the first real one
+            e: BaseException = e0
+            while isinstance(e, BaseExceptionGroup) and e.exceptions:
+                e = e.exceptions[0]
+            if isinstance(e, HAError):
+                raise e from None
+            if isinstance(e, ImportError):
+                raise HAError("wsproto is missing: install the plugin's packages from its page. Nothing was created.") from None
+            if isinstance(e, TimeoutError):
+                raise HAError("Home Assistant did not answer in time" + (", so the helper may or may not have been created. Check Home Assistant's helpers before trying again."
+                                                                     if create_sent else ". Nothing was created.")) from None
+            self._log.warning("home assistant helper command failed: %s", type(e).__name__)
+            if _cause_is_tls(e):
+                raise HAError("Home Assistant's certificate was not accepted for the WebSocket. Check ca_certificate.") from None
+            raise HAError("The WebSocket to Home Assistant failed" + (", so the helper may or may not have been created. Check Home Assistant's helpers before trying again."
+                                                                  if create_sent else ". Nothing was created.")) from None
+        self._states = None  # the entity list and the registry are now stale
+        self._registry = None
         return out
 
     # ------------------------------------------------------------- registry

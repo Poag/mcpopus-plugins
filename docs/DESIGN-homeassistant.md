@@ -1,6 +1,6 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.4.4 (0.4.4 clarifies the allow lists and the definition messages, section 5a and 9c control 9). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.5.0 (0.4.4 clarified the allow lists and the definition messages, section 5a and 9c control 9; 0.5.0 adds `create_helper`, section 9d). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
 (`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
 built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d. The definition tools were run live on 10 November 2026 (section 11); section 10f is the corrected second run.
@@ -141,7 +141,7 @@ list; the service must be in `allowed_services` and in the entity's domain.
 - `allowed_services`: `input_boolean.turn_on`, `input_boolean.turn_off`.
 - `write_entity_allowlist`: `input_boolean.doorbell_chime`.
 - `entity_allowlist`: leave **empty**. Both entities are then visible. If you do set it, it must match **both** the trigger and the action entity (`event.doorbell_doorbell` and `input_boolean.doorbell_chime`), and then everything else is hidden.
-- The helper `input_boolean.doorbell_chime` must already exist in Home Assistant (Settings, Devices and services, Helpers). If it is missing or blocked, `save_automation` says which: it names the policy rule, or says the entity does not exist.
+- The helper `input_boolean.doorbell_chime` must already exist in Home Assistant (Settings, Devices and services, Helpers), or be created by `create_helper` (section 9d; that makes `input_boolean.claude_doorbell_chime`, so use that id in the automation and in `write_entity_allowlist`). If it is missing or blocked, `save_automation` says which: it names the policy rule, or says the entity does not exist.
 - The trigger is a **state trigger with no `to`**. An event entity's state is the timestamp of its last event (`None`, shown as unknown, before the first), never `on` or `off`, so `to: "on"` would never match. A state trigger with only an `entity_id` fires on every state change, attribute-only changes included (Core `components/event/entity.py`, `components/homeassistant/triggers/state.py`, read 11 November 2026).
 
 The failure reported on 11 November 2026 was an `entity_allowlist` holding one pattern that matched nothing (it showed as `1 allow pattern(s)` and `Visible entities: 0`): the owner's intent was a write permission, which belongs in `write_entity_allowlist`. From 0.4.4 `status` says which setting is which, warns when the allow list matches nothing, and says how many visible entities match the write patterns.
@@ -167,6 +167,7 @@ as data and caps their size).
 | `set_automation_enabled` | `entity_id`, `enabled` | **Tier write.** Enables or disables one automation without stopping a run in progress. Section 9b |
 | `get_automation_definition` | `entity_id` | Read (needs the token's user to be an administrator). The triggers, conditions and actions of one automation; refused as "No definition available." if it contains templates or names anything hidden. Section 9c |
 | `save_automation` | `automation_id`, `alias`, `triggers`, `conditions`, `actions`, `description`, `mode` | **Tier write** (needs the token's user to be an administrator). Creates or replaces an automation whose id starts with the prefix; strict subset; starts disabled. Section 9c |
+| `create_helper` | `helper_id`, `initial` | **Tier write** (needs the token's user to be an administrator). Creates one `input_boolean` named `<helper_id_prefix><helper_id>` and puts it in the owner's helper category. Section 9d |
 | `delete_automation` | `automation_id` | **Tier admin** (needs the token's user to be an administrator). Deletes an automation whose id starts with the prefix. Section 9c |
 
 Not built, on purpose: the template endpoint, a raw API pass-through, any call to an arbitrary URL, the camera proxy, the error log,
@@ -187,6 +188,8 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `write_entity_allowlist` | empty | Globs. **The write filter**: the entities `call_service` and the actions of saved automations may change. It hides nothing. An entity must match it **and** be visible under the read filter. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
 | `automation_id_prefix` | `claude_` | Ids Claude may create, change or delete must start with this. Human-written automations never do |
 | `automation_categories` | empty | Names of Home Assistant automation categories (case-insensitive). Automations in these categories can be triggered, enabled and disabled. Empty means none, except automations matching `write_entity_allowlist` |
+| `helper_id_prefix` | `claude_` | Helpers `create_helper` makes are named `<prefix><helper_id>`. 1 to 20 characters, lower-case letters, digits and underscores, starting with a letter (section 9d) |
+| `helper_category` | empty | Name of an existing Home Assistant **helper** category the new helpers are put in. Empty means `create_helper` refuses (section 9d) |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
 | `max_results` | 50 | 1 to 500 |
 | `max_history_hours` | 72 | 1 to 720 |
@@ -326,14 +329,35 @@ Controls, all enforced by the plugin before anything is sent:
 Not built: editing automations written by hand (the prefix fence refuses), blueprints, scripts, scenes, traces. Home Assistant 2026 versions
 older than the one read here may differ in field names (unverified).
 
-## 9d. Proposal: creating `input_boolean` helpers (not built)
+## 9d. Creating helpers (`create_helper`, 0.5.0)
 
-Asked for on 11 November 2026 as optional. Not built, because it needs decisions that widen what Claude can change, which waits for the owner.
+Asked for on 11 November 2026: Claude may create helpers, with a prefix and in a category. Built for `input_boolean` only (the helper type the doorbell chime needed);
+other helper types are separate decisions. There is no update or delete tool: removing a helper is done in Home Assistant, which keeps this to one new kind of change.
 
-- **How it would work.** Helpers are created over the WebSocket command `input_boolean/create` (name, icon, initial), which is administrator-only. REST cannot create them. The plugin's WebSocket is read-only today (opened per refresh, three list commands, closed), so this adds the plugin's first WebSocket write: one authenticated session, one command, closed, never retried, no subscriptions. Source not yet read for this: `components/input_boolean/__init__.py` (storage collection) must be checked for the field names and the id Home Assistant derives from the name.
-- **Fence.** The entity id comes from the name, so a prefix fence on the name (`claude_`) gives `input_boolean.claude_<name>`; ids not starting `input_boolean.claude_` could not be created, changed or deleted. **This does not fit `input_boolean.doorbell_chime`**: that name has no prefix, so the helper would be `input_boolean.claude_doorbell_chime` and the automation would use that. The owner's alternative is to create `doorbell_chime` by hand in Home Assistant.
-- **Tier and checks.** A new write tool `create_helper` (and, for tidiness, `delete_helper`, admin), each its own host tick and approval, sharing the write rate limit; domain limited to `input_boolean` (no other helper type); name 1 to 40 of `a-z 0-9 _` after the prefix; initial state off; icon from a short list or none; refuse if the entity already exists; the new entity must then be added to `write_entity_allowlist` by the owner (`input_boolean.claude_*`), so creating a helper never makes it writable by itself.
-- **Decisions needed from the owner:** whether to build it at all; the prefix versus a hand-made `doorbell_chime`; whether `delete_helper` is wanted.
+What was verified (Core and frontend source, read 11 November 2026):
+
+| Fact | Source |
+| --- | --- |
+| Helpers are created over the WebSocket command `input_boolean/create` (REST has none). It is registered with `require_admin` unconditionally, as are update and delete | Core `helpers/collection.py` (`StorageCollectionWebsocket.async_setup`) |
+| The fields are `name` (required, non-empty), `initial` (boolean, optional) and `icon` (optional). The reply is the created item | Core `components/input_boolean/__init__.py` (`STORAGE_FIELDS`), `helpers/collection.py` (`ws_create_item`) |
+| The item id is the slug of the name, with `_2`, `_3`... added if it is taken; the entity id is `input_boolean.<item id>` (the entity module that sets the unique id was not read, so that last step is checked after creation) | Core `helpers/collection.py` (`IDManager.generate_id`), `input_boolean/__init__.py` (`_get_suggested_id` returns the name) |
+| `config/entity_registry/update` takes `categories`, a map of scope to category id (`null` removes); passing an id adds or moves; scopes not named are left alone. It is administrator-only. `config/entity_registry/get` and the category list are not | Core `components/config/entity_registry.py`, `category_registry.py` |
+| The category scope for helpers is `"helpers"` (`entity.categories.helpers`; the helpers page lists and assigns with `scope: "helpers"`) | Frontend `src/panels/config/helpers/ha-config-helpers.ts` |
+
+Controls, all enforced by the plugin before anything is sent:
+
+1. **Off until ticked, and needs an administrator.** `create_helper` is its own tier-write tool (the owner ticks it by name and should set it to Needs approval). Home Assistant refuses the command unless the token's user is an administrator; that refusal pauses admin calls for 60 seconds (shared with the automation definition tools) and says so.
+2. **Prefix.** `helper_id` is 1 to 40 characters `a-z 0-9 _`, no leading, trailing or doubled underscore (so the slug is exactly the name). The helper's name is sent as `<helper_id_prefix><helper_id>` (setting `helper_id_prefix`, default `claude_`), so the entity is `input_boolean.claude_<helper_id>`. After creation the plugin checks that Home Assistant's id equals what was asked for.
+3. **Category, required.** The owner names one existing helper category in `helper_category` (case-insensitive). Empty means the tool refuses. The category must already exist in Home Assistant (Settings, Devices and services, Helpers, Categories); the plugin checks it **before** creating anything and never creates categories. The new helper is put in that category with `config/entity_registry/update` (`{"categories": {"helpers": <id>}}`), nothing else about the entity registry is changed.
+4. **Order of checks** (each refusal is before anything is sent): the setting is set; the id is well formed; the new entity id passes the policy (denied domain, deny pattern, allow list: otherwise it would be created and Claude could not see it; the rule is named); no entity with that id exists in Home Assistant, hidden or not (one answer: "already exists or cannot be created"); the category exists; the write-rate limit (shared with `call_service`). Then one WebSocket session: authenticate, create, wait up to about 3 seconds for the entity to appear in the registry, assign the category, close. Never retried.
+5. **`initial`** is a boolean, default off. No icon, no other fields.
+6. **Creating a helper does not make it writable.** The owner adds `input_boolean.claude_*` (or the single id) to `write_entity_allowlist`, and the services to `allowed_services`; the result says whether the new entity matches the write list now. This keeps "what exists" and "what may be changed" separate (section 5a).
+7. **Partial outcomes are said plainly.** If the helper is created but the entity does not appear in time, or the category cannot be assigned (refused, or the id differs from what was asked), the result says what exists and what the owner must do in Home Assistant; nothing is retried or undone. A timeout says it may or may not have happened.
+8. Audit records argument names only; the plugin counts `helpers_created` in the host statistics. Home Assistant's own error text is never repeated.
+
+Not built: other helper domains (`input_number`, `input_select`, timers...), icons, update, delete, creating categories, changing an existing helper's category.
+
+Unverified: python-slugify's treatment of underscores is relied on only through the post-creation id check; the delay before the entity registry entry exists; the exact error code a non-administrator gets over the WebSocket (the plugin treats any refusal of the create command as the administrator case).
 
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
@@ -452,7 +476,7 @@ automation name for the clash test `Inside porch light - day, evening, night`; a
 Test the homeassistant connector. Use only the values written here. For every step report: the step, what you called, the reply (verbatim for refusals), and PASS or FAIL against "Expect". Do not skip a step, do not stop at a failure, and never retry a refusal with different values.
 
 PART 1, read only
-1. status. Expect: version 0.4.4, area information available, call_service "2 service(s) allowed" and 2 entity patterns, categories claude.
+1. status. Expect: version 0.5.0, area information available, call_service "2 service(s) allowed" and 2 entity patterns, categories claude.
 2. list_services. Expect: light.turn_on and light.turn_off, targets light.outside_porch and light.inside_porch.
 3. list_automations. Expect: 8 automations, none starting claude_, all "controllable: no".
 4. get_automation_definition for automation.inside_porch_light_day_evening_night. Expect either a definition or "No definition available." Report which; no pass or fail.
@@ -533,6 +557,36 @@ then a 60 second pause) and `entity_allowlist`; both are still unverified live.
 
 1. The settings difference on 10 November (7 services on `light.*` earlier in the day, 0 services and no patterns after the update): was that intended, or did the update reset them?
 2. Should the write list be the explicit list above instead of `light.*`, so the nursery light can never be a target? It is currently `unavailable` in Home Assistant.
+
+## 10g. Acceptance checklist for `create_helper` (Alex, against the real Home Assistant)
+
+Looked up on 11 November 2026 through the connector: Home Assistant 2026.11.1; `input_boolean` has three entities (`car_30`, `car_60`, `car_now`) and no
+`doorbell_chime`; `event.doorbell_doorbell` exists with state `unknown` (an event entity before its first event, as the source says).
+
+**Set up (owner).** Update the plugin to 0.5.0. In Home Assistant create a **helper category** (Settings, Devices and services, Helpers, then the category filter, Add category) named
+`Claude`. In the plugin settings set `helper_category` = `Claude`; leave `helper_id_prefix` at `claude_`; set `write_entity_allowlist` = `input_boolean.claude_doorbell_chime` (separate from
+`entity_allowlist`, which stays empty) and keep `allowed_services` = `input_boolean.turn_on`, `input_boolean.turn_off`. Under Policy tick `create_helper` and `save_automation` and set
+both to Needs approval. The token's user must be an administrator (as for the definition tools).
+
+```
+Test create_helper on the homeassistant connector. For each step report the step, the call, the reply (verbatim for refusals) and PASS or FAIL against "Expect". Do not retry a refusal with other values and do not call any tool not named.
+1. status. Expect: version 0.5.0 and a line "Helpers Claude may create: input_boolean helpers named input_boolean.claude_<name>, in the helper category Claude". Also: input_boolean has 3 entities.
+2. create_helper with helper_id "door__chime". Expect: refused, helper_id is 1 to 40 lower-case letters, digits and single underscores.
+3. create_helper with helper_id "Doorbell Chime" (with a space). Expect: the same refusal.
+4. search_entities with domain input_boolean. Expect: still exactly 3 (car_30, car_60, car_now): nothing was created by steps 2 and 3.
+5. create_helper with helper_id "doorbell_chime". Approve. Expect: "Created the helper input_boolean.claude_doorbell_chime (off to start)", "It is in the helper category Claude", and that it matches write_entity_allowlist.
+6. get_entity input_boolean.claude_doorbell_chime. Expect: state off.
+7. create_helper with helper_id "doorbell_chime" again. Expect: "already exists, or cannot be created" and nothing new.
+8. search_entities with domain input_boolean. Expect: exactly 4, the new one included.
+9. status. Expect: "1 visible entity(ies) match those patterns" and no "Write note".
+10. save_automation: automation_id claude_doorbell_chime, alias "Doorbell chime", triggers [{"type":"state","entity_id":"event.doorbell_doorbell"}], actions [{"service":"input_boolean.turn_on","entity_id":"input_boolean.claude_doorbell_chime"},{"delay":"00:00:03"},{"service":"input_boolean.turn_off","entity_id":"input_boolean.claude_doorbell_chime"}]. Approve. Expect: Created, starts DISABLED.
+Finish with a table of the 10 steps.
+```
+
+Then, in Home Assistant, check by hand: the Helpers page shows `claude_doorbell_chime` as a toggle, in the category Claude, off; the new automation exists and is off. There is no delete tool: remove the helper
+and the automation in Home Assistant when you have finished (or keep them: the chime is the point). To enable the automation, turn it on in Home Assistant and press the doorbell once; the helper should switch on for
+3 seconds. Optional: set `helper_category` to a name that does not exist and repeat step 5: expect "No helper category ... nothing was created". Optional: use a non-administrator token and repeat step 5: expect the
+"refused the helper command" message, then a pause message on the next call. Not covered by this run: HA's slug rule for ids with several underscores (the plugin checks the id it gets back), and a slow registry.
 
 ## 11. Live check results
 

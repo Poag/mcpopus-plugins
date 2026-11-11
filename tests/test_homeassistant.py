@@ -46,8 +46,8 @@ DENIED = ["lock.front_door", "alarm_control_panel.house", "camera.driveway", "pe
 async def test_only_read_tools_are_served_by_default(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, values(ha), SECRETS) as (c, lp, _):
         assert sorted(t.name for t in (await c.list_tools()).tools) == READ_TOOLS
-        assert {m.name: m.tier for m in lp.declared if m.kind == "tool" and m.tier != "read"} == {"call_service": "write", "trigger_automation": "write", "set_automation_enabled": "write", "save_automation": "write", "delete_automation": "admin"}
-        assert {m.name for m in lp.declared if m.kind == "tool" and not m.untrusted} == {"status", "delete_automation"}  # the only tools whose text is entirely our own
+        assert {m.name: m.tier for m in lp.declared if m.kind == "tool" and m.tier != "read"} == {"call_service": "write", "trigger_automation": "write", "set_automation_enabled": "write", "save_automation": "write", "delete_automation": "admin", "create_helper": "write"}
+        assert {m.name for m in lp.declared if m.kind == "tool" and not m.untrusted} == {"status", "delete_automation", "create_helper"}  # the only tools whose text is entirely our own
         err, text = await call(c, "call_service", {"domain": "light", "service": "turn_on"})
         assert err and "Unknown tool" in text
 

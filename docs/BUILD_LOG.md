@@ -3,6 +3,28 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.5.0 (create_helper: input_boolean, with a prefix, in a category)
+
+Alex asked for helper creation "with prefix and in a category". Design first: section 9d (promoted from the earlier proposal), settings `helper_id_prefix` (default `claude_`) and `helper_category` (empty means the tool refuses), checklist 10g.
+
+### Verified (Core and frontend source, read 11 Nov 2026)
+
+`input_boolean/create` is a WebSocket command, administrator-only, fields `name` (required), `initial`, `icon`; the id is the slug of the name with `_2` on a clash; `config/entity_registry/update` takes `categories` as a scope-to-id map and is administrator-only; the helper category scope is `"helpers"` (frontend helpers page). Live on 11 Nov: `input_boolean` has three entities and no `doorbell_chime`; `event.doorbell_doorbell` has state `unknown`; 0.4.4's new `status` write note correctly said no visible entity matched the write pattern.
+
+### Built
+
+- `create_helper(helper_id, initial=False)`, tier write, `input_boolean` only. Checks before anything is sent: category setting set; id well formed (single underscores, up to 40); the new id passes the read policy (the rule is named); no entity with that id exists, hidden or not (one answer); the category exists (checked in the same WebSocket session, before the create); the shared write rate limit. Then one session: authenticate, list helper categories, create, wait up to 3 seconds for the registry entry, assign the category. Never retried. The result says plainly if the helper exists but is not in the category, or if Home Assistant chose a different id, and whether the helper matches `write_entity_allowlist`: creating a helper never makes it changeable.
+- Client: `create_helper` (the plugin's first WebSocket write), `_helper_refused` (shares the 60 second admin pause), caches dropped afterwards. Fake Home Assistant: `input_boolean/create`, entity registry get and update, helper categories, switches for a slow registry, a failing update, a create error, a forced suffix.
+- 0.5.0 in `plugin.toml`; README and PLUGINS entries; `status` line for helpers.
+
+### Verified by tests
+
+28 tests in `tests/test_homeassistant_helpers.py` (real host manager and MCP client, fake Home Assistant over HTTP and WebSocket): off until ticked by name; the full create (prefixed name, category map `{"helpers": id}`, exactly two WebSocket writes, no existing entity changed, new helper visible at once); 13 malformed ids refused with no connection made; missing and non-existent category create nothing; existing and hidden ids; policy-hidden ids not created, rule named; non-administrator refused then paused with no second attempt; slow registry waited for, missing entry reported; refused category assignment and a different id reported; create rejected without repeating Home Assistant's text; shared rate limit; token never in output, log or audit; config rules. Mutation checks, each made a test fail: prefix not applied; category existence not enforced; policy check, collision check, rate limit, admin pause removed; wrong category scope; assignment failure reported as success; empty-category check removed (found by a mutation and the test tightened); id regex loosened; id mismatch not reported; caches kept; registry wait removed; refusal code not mapped.
+
+### Not verified
+
+Everything on the real Home Assistant (checklist 10g). Specifically: that `config/entity_registry/get` finds the entity within 3 seconds; the exact error code a non-administrator gets over the WebSocket (the plugin treats a refusal of the create command as the administrator case); how python-slugify treats ids with several underscores (the plugin only allows single underscores and checks the id it gets back). No update or delete tool: the owner removes helpers in Home Assistant.
+
 ## 2026-11-11: homeassistant 0.4.4 (doorbell chime report: allow lists explained, definition messages name the rule)
 
 Owner report: `save_automation` for `claude_doorbell_chime` (trigger `event.doorbell_doorbell`, actions on `input_boolean.doorbell_chime`) failed twice. First with the `allowed_services` message (correct: nothing was allowed yet). Then, after the two input_boolean services were allowed, with "The entity event.doorbell_doorbell in a state trigger does not exist or is not available", while `status` showed `1 allow pattern(s)` and `Visible entities: 0`.
