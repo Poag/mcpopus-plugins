@@ -107,3 +107,66 @@ OAuth, push notifications, and more than one mailbox account per plugin.
 attachment messages, an injection message returned as quoted data and not followed, messages still unread afterwards, missing folder and
 bad uid errors. The only failed step was a test-prompt expectation of `[Gmail]/All Mail`, which does not exist on a non-Gmail account.
 Not yet verified: Gmail itself, 0.2.0 on a real server, a message over `max_fetch_bytes`, STARTTLS (not built).
+
+## 10. Proposal: new-mail notification (design only, nothing built, 11 November 2026)
+
+Alex asked (11 November 2026) for the plugin to poll the configured folders and call back to Claude when new mail arrives. This
+section sets out what is possible and what needs deciding. It would be a new release (0.3.0) behind its own acceptance gate.
+
+### 10.1 What is and is not possible
+
+- **Polling is feasible.** The host runs a plugin's `setup`/`teardown`; a plugin may start an asyncio task in `setup` and stop it in
+  `teardown` (host 0.3.0 `manager.py`, read 11 November 2026). The loop would use the existing read-only backend (`EXAMINE`,
+  `STATUS`, `UID SEARCH`, `BODY.PEEK[HEADER.FIELDS]`), so nothing is marked read.
+- **A claude.ai connector cannot be pushed to.** MCP over HTTP is request and response; claude.ai does not listen for server
+  notifications and an open conversation cannot be woken from outside. So "call Claude" needs a target that can start or wake
+  something. That target is Alex's choice (10.4). I have not verified any vendor's endpoint from this sandbox and will not build one
+  against a guessed API.
+- **Rule 8 in DESIGN.md** (no network work in `setup` that can fail the load) still holds: the task starts in `setup` but connects
+  only on its first tick, and a failing tick is logged and retried with backoff, never raised.
+
+### 10.2 Proposed behaviour
+
+| Item | Proposal |
+| --- | --- |
+| Setting `notify_url` | Empty by default, which means polling is off and the plugin is exactly 0.2.0. `https://` only. Treated as a secret (`SecretStr`), because webhook URLs often carry the credential. Never logged or returned |
+| Setting `notify_token` | Optional `SecretStr`, sent as `Authorization: Bearer ...` |
+| Setting `notify_folders` | Folders to watch, default `INBOX`. Each must pass the same readable/blocked check as every tool, so a blocked folder is never polled |
+| Setting `poll_seconds` | Default 300, range 60 to 3600. A new connection per tick (decision 2 kept). IDLE is not used |
+| What counts as new | A UID higher than the last one seen in that folder, same `UIDVALIDITY`. A changed `UIDVALIDITY` resets the baseline silently. The first tick after start only records the baseline, so a restart never replays the mailbox |
+| Where the baseline lives | In memory only. After a restart or reload mail that arrived while the plugin was down is not reported (stated in the guide). Persisting it needs a data directory the host does not provide yet |
+| Payload | `{"event": "new_mail", "count": N, "folders": {"INBOX": [uid, ...]}}`, at most 20 uids per call, one POST per tick at most, no sender, no subject, no body |
+| Retries | One try per tick; on failure the uids are kept and re-sent next tick, capped at 200 pending, oldest dropped first with a logged count |
+| Tools | `mailbox_status` gains a line: polling on or off, last tick time, last result (ok, failed with a cause), pending count. No new tool, so no new tier |
+| Failure text | Names the setting, never the URL: "The notification URL refused the call. Check notify_url." |
+
+### 10.3 Safety
+
+- **Untrusted text stays out of the payload.** Sender and subject are written by strangers. A notification that starts a Claude
+  session with that text in its prompt would be a direct prompt-injection route. Metadata-only means the session must call
+  `list_messages` (which is `untrusted=True`) to see anything. This is why sender and subject are not in the proposed payload.
+- **Outbound destination is the owner's alone.** The URL is a setting, not a tool argument; no model can set or change it. Host
+  must be a public name; no IP literals, no `localhost`, no private ranges (checked after resolution too, against redirects: redirects
+  are not followed). An optional `notify_ca_certificate` is not offered; a private target is a later decision.
+- **No new capability for the model.** The plugin still has only read tools. The only write is the outbound POST, which the model
+  cannot trigger or shape. Policy tick for it: none, because it is not a tool; the owner turns it on by filling `notify_url`.
+- **Loop bounds.** One POST per tick, 10 second timeout, payload under 2 KB, 20 uids. A flood of mail cannot cause a flood of calls.
+- A test asserts the fake IMAP server still never receives `SELECT`, `STORE`, `COPY`, `APPEND` or `EXPUNGE`.
+
+### 10.4 Decisions for Alex
+
+1. **What does "call Claude" mean?** Options: (a) a Claude Code scheduled/API-triggered routine that starts a session when its URL is
+   called (needs its URL and token; I have not verified the request format); (b) a generic webhook to something you run (ntfy,
+   Home Assistant, a script) that tells you or wakes Claude your way; (c) no push at all: instead a `new_mail_since` tool Claude calls
+   at the start of a chat. (c) needs no outbound call and no stored state but only works when you are already talking to Claude.
+2. **Payload detail.** Metadata-only as proposed, or also sender and subject (more useful, but injection-exposed)?
+3. **Baseline persistence.** Accept in-memory (a restart skips mail that arrived meanwhile), or ask for a host data directory first?
+4. **Folders and interval.** INBOX only and 5 minutes, or a different list?
+
+### 10.5 Plan once decided
+
+Tests with the real host manager and a fake IMAP server plus a fake webhook receiver over TLS: baseline on first tick, new UID
+detected once, no replay after `UIDVALIDITY` change, blocked folder never polled, URL and token absent from logs and tool output,
+no redirects followed, private addresses refused, retry and cap, payload contains no mail text, plugin stops on `teardown`. Each
+protection gets a mutation check. Version 0.3.0, README table, `docs/PLUGINS.md`, `docs/BUILD_LOG.md`, `docs/GUIDE_EMAIL.md`.
+Not verifiable here: delivery to any real Claude endpoint; that stays on the live checklist.
