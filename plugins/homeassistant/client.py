@@ -53,6 +53,9 @@ class Registry:
     entity_area: dict[str, str] = field(default_factory=dict)  # entity id -> area id (the entity's own, else its device's)
     categories: dict[str, str] = field(default_factory=dict)  # automation category id -> name
     entity_category: dict[str, str] = field(default_factory=dict)  # automation entity id -> category id
+    helper_categories: dict[str, str] = field(default_factory=dict)  # helper category id -> name
+    categories_known: bool = False  # likewise for the automation categories
+    helper_categories_known: bool = False  # False when Home Assistant would not list them (so "none" is not the same as "could not check")
 
     def area_name(self, entity_id: str) -> str:
         return self.areas.get(self.entity_area.get(entity_id, ""), "")
@@ -310,7 +313,8 @@ class HomeAssistant:
                                    and str(c.get("name") or "").casefold() == wanted), None)
                     if cat_id is None:
                         raise HelperRefused("No helper category with the name in the claude_category setting exists in Home Assistant, so nothing was created. "
-                                            "Create it first (Settings, Devices and services, Helpers, then the category filter), or check the setting.")
+                                            "Categories belong to one place: create one with that name on the Helpers page (Settings, Devices and services, Helpers, then the Categories filter). "
+                                            "A category of the same name for automations is a different one and does not count. Run status to see which of the two exist.")
                     create_sent = True
                     ok, item, code = await command(ws, {"type": "input_boolean/create", "name": name, "initial": initial})
                     if not ok:
@@ -374,8 +378,9 @@ class HomeAssistant:
         s: Settings = self._get()
         ws_url = ("wss://" if s.base_url.startswith("https://") else "ws://") + s.base_url.split("://", 1)[1] + "/api/websocket"
         commands = {1: {"type": "config/area_registry/list"}, 2: {"type": "config/device_registry/list"}, 3: {"type": "config/entity_registry/list"},
-                    4: {"type": "config/category_registry/list", "scope": "automation"}}
-        optional = {4}  # categories are only needed for automations; an older Home Assistant may not have the command
+                    4: {"type": "config/category_registry/list", "scope": "automation"}, 5: {"type": "config/category_registry/list", "scope": "helpers"}}
+        optional = {4, 5}  # categories are only needed for automations and helpers; an older Home Assistant may not have the command
+        unlisted: set[int] = set()
         results: dict[int, Any] = {}
         try:
             async with asyncio.timeout(s.timeout * 3):
@@ -397,6 +402,7 @@ class HomeAssistant:
                             if not msg.get("success") or not isinstance(msg.get("result"), list):
                                 if msg["id"] in optional:
                                     results[msg["id"]] = []
+                                    unlisted.add(msg["id"])
                                     continue
                                 raise RegistryUnavailable("Home Assistant would not list its areas and devices. The token's user may not be allowed.")
                             results[msg["id"]] = msg["result"]
@@ -427,4 +433,5 @@ class HomeAssistant:
                 if isinstance(cats, dict) and isinstance(cats.get("automation"), str):
                     entity_category[e["entity_id"]] = cats["automation"]
         categories = {c["category_id"]: str(c.get("name") or "") for c in results[4] if isinstance(c, dict) and isinstance(c.get("category_id"), str)}
-        return Registry(areas, entity_area, categories, entity_category)
+        helper_categories = {c["category_id"]: str(c.get("name") or "") for c in results[5] if isinstance(c, dict) and isinstance(c.get("category_id"), str)}
+        return Registry(areas, entity_area, categories, entity_category, helper_categories, 4 not in unlisted, 5 not in unlisted)

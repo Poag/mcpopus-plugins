@@ -283,6 +283,20 @@ class HomeAssistantPlugin(Plugin):
             "Automations Claude may trigger or switch: " + (f"category {tx.clean(cfg.claude_category, 80)}" if cfg.claude_category else "no category set (claude_category is empty)")
             + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
+        if cfg.claude_category:
+            try:
+                reg = await self.ha.registry()
+            except RegistryUnavailable:
+                lines.append(f"Category {tx.clean(cfg.claude_category, 80)}: could not be checked (the area and category data is not available, see above).")
+            else:
+                want = cfg.claude_category.casefold()
+                in_auto = sum(1 for e in states if domain_of(e) == "automation" and reg.automation_category(e).casefold() == want)
+                auto = ("could not be checked" if not reg.categories_known else
+                        ("found, " + (f"{in_auto} automation(s) in it" if in_auto else "no automation is in it yet")) if any(n.casefold() == want for n in reg.categories.values())
+                        else "NOT found (create it under Settings, Automations, Categories)")
+                helpers = ("could not be checked" if not reg.helper_categories_known else "found" if any(n.casefold() == want for n in reg.helper_categories.values())
+                           else "NOT found (create it on the Helpers page: Settings, Devices and services, Helpers, then the Categories filter)")
+                lines.append(f"Category {tx.clean(cfg.claude_category, 80)}: for automations {auto}; for helpers {helpers}. These are two separate categories that share a name.")
         legacy = sorted(k for k in (cfg.model_extra or {}) if k in LEGACY_SETTINGS)
         if legacy:
             lines.append(f"Old settings are still stored and are no longer used: {', '.join(legacy)}. They were replaced by claude_prefix and claude_category (design section 5b); where they agreed, their values were carried over. "

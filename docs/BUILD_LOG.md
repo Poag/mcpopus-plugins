@@ -3,6 +3,29 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.6.1 (status shows whether the category exists for automations and for helpers)
+
+Another session, asked to save the doorbell chime, found `input_boolean.doorbell_chime` missing and called `create_helper` (plugin 0.6.0), which refused: "No helper category with the name in the claude_category setting exists in Home Assistant, so nothing was created". It then stopped and asked the owner.
+
+### Diagnosis
+
+- The refusal is correct behaviour: the category list for the helpers scope came back fine (otherwise the message would have been "would not list its helper categories") and held no category with that name. Nothing was created.
+- Live on 11 Nov (read tools only): plugin 0.6.0, `claude_category` is `Claude`, no old-settings line (the migration and the Save worked), `list_automations` for that category returns 0. So the settings are right; what is missing is a category named Claude **in the helpers scope**. Categories belong to one scope, so a Claude category made for automations does not satisfy it. The connector could not show this: neither the other session nor I could see which categories exist, and the 0.6.0 error did not say that the two scopes are separate.
+- Not a defect in the lookup (case-insensitive, scope `"helpers"` confirmed from the frontend source). Not confirmed on the real home which of the two categories exists; the owner can see it on the Helpers page.
+
+### Changed
+
+- `status` adds, when `claude_category` is set, one line: whether a category of that name exists for automations (and how many automations are in it) and for helpers, or that it could not be checked (Home Assistant would not list categories). It names no other category. The registry fetch lists the helpers scope as well (one more optional WebSocket command in the existing read-only session).
+- The `create_helper` refusal now says categories belong to one place, names the Helpers page and the Categories filter, says a same-named automations category does not count, and points at `status`.
+- Checklist 10g: step 1 checks the new status line first; the set-up says where the category is made. Version 0.6.1.
+
+### Verified
+
+2 new tests in `tests/test_homeassistant_unified.py` (both exist; helpers category missing, which is the reported case; neither exists; categories unavailable reported as unknown, not missing; no line when no category is set; an empty category reported as such). Six mutation checks each made a test fail: helper categories not fetched; unknown reported as missing (helpers and automations); status line removed; the error not naming the Helpers page; other categories' names listed.
+
+### Not verified
+
+On the real Home Assistant: the new status line (needs 0.6.1 on the host); that its WebSocket answers the helpers-scope list as the frontend source implies. Not done: creating the helper. The two names are the owner's choice: the plugin can only make `input_boolean.claude_<name>` (the prefix is the fence), while the owner's write list names `input_boolean.doorbell_chime`.
 ## 2026-11-11: email notification tests made deterministic (no plugin change, still 0.3.0)
 
 Two flaky tests: CI run 45 (commit afb0d05) failed `test_first_check_only_sets_a_baseline_then_new_mail_is_reported_once` (first event had count 1, INBOX [3] only, expected count 2 with Projects/work [11]); a local full run failed `test_only_two_hundred_ids_wait_and_the_oldest_go_first` (passes alone).

@@ -1,6 +1,6 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.6.0 (0.4.4 clarified the allow lists and the definition messages, section 5a and 9c control 9; 0.5.0 added `create_helper`, section 9d; 0.6.0 unifies the prefix and the category into `claude_prefix` and `claude_category`, section 5b). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.6.1 (0.6.1: `status` says whether the category exists for automations and for helpers; 0.4.4 clarified the allow lists and the definition messages, section 5a and 9c control 9; 0.5.0 added `create_helper`, section 9d; 0.6.0 unifies the prefix and the category into `claude_prefix` and `claude_category`, section 5b). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
 (`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
 built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d. The definition tools were run live on 10 November 2026 (section 11); section 10f is the corrected second run.
@@ -157,7 +157,8 @@ two settings now replace them, and every present and future area (automations, h
 | `claude_category` (default empty) | The one Home Assistant category Claude works in | `list_automations`, `trigger_automation`, `set_automation_enabled` (an automation in the category is controllable), `create_helper` (the new helper is put in it) |
 
 A Home Assistant category belongs to one scope (automations, helpers, scripts and so on), so the owner creates a category with **the same name in each scope** they use; the plugin looks the name up in the scope
-each tool needs. It never creates categories.
+each tool needs. It never creates categories. Because two categories that share a name are easy to confuse, `status` (0.6.1) says for the configured name whether it exists for automations (and how many automations are in it) and for helpers, or that this could not be checked; it names no other category.
+This was added after `create_helper` refused with "no helper category" while a category of that name existed only for automations (11 November 2026).
 
 **Not done, and why.** `save_automation` does **not** put the automation it creates into the category. That would make every Claude-written automation immediately triggerable and
 switchable by `trigger_automation` and `set_automation_enabled`, including enabling it, which removes the "starts disabled, the owner turns it on" safeguard (section 9c control 4). Today the owner puts an
@@ -496,7 +497,7 @@ automation name for the clash test `Inside porch light - day, evening, night`; a
 Test the homeassistant connector. Use only the values written here. For every step report: the step, what you called, the reply (verbatim for refusals), and PASS or FAIL against "Expect". Do not skip a step, do not stop at a failure, and never retry a refusal with different values.
 
 PART 1, read only
-1. status. Expect: version 0.6.0, area information available, call_service "2 service(s) allowed" and 2 entity patterns, category claude (a line "Automations Claude may trigger or switch: category ...").
+1. status. Expect: version 0.6.1, area information available, call_service "2 service(s) allowed" and 2 entity patterns, category claude (a line "Automations Claude may trigger or switch: category ...").
 2. list_services. Expect: light.turn_on and light.turn_off, targets light.outside_porch and light.inside_porch.
 3. list_automations. Expect: 8 automations, none starting claude_, all "controllable: no".
 4. get_automation_definition for automation.inside_porch_light_day_evening_night. Expect either a definition or "No definition available." Report which; no pass or fail.
@@ -583,14 +584,14 @@ then a 60 second pause) and `entity_allowlist`; both are still unverified live.
 Looked up on 11 November 2026 through the connector: Home Assistant 2026.11.1; `input_boolean` has three entities (`car_30`, `car_60`, `car_now`) and no
 `doorbell_chime`; `event.doorbell_doorbell` exists with state `unknown` (an event entity before its first event, as the source says).
 
-**Set up (owner).** Update the plugin to 0.5.0. In Home Assistant create a **helper category** (Settings, Devices and services, Helpers, then the category filter, Add category) named
-`Claude`. In the plugin settings set `claude_category` = `Claude` (the same field the automation tools use); leave `claude_prefix` at `claude_`; set `write_entity_allowlist` = `input_boolean.claude_doorbell_chime` (separate from
+**Set up (owner).** Update the plugin to 0.6.1. In Home Assistant create a **helper category** named
+`Claude` **on the Helpers page** (Settings, Devices and services, Helpers; open the Categories filter in the side panel and choose Add category). A category called Claude that you made for automations does not count: it is a separate one, and `status` reports both. In the plugin settings set `claude_category` = `Claude` (the same field the automation tools use); leave `claude_prefix` at `claude_`; set `write_entity_allowlist` = `input_boolean.claude_doorbell_chime` (separate from
 `entity_allowlist`, which stays empty) and keep `allowed_services` = `input_boolean.turn_on`, `input_boolean.turn_off`. Under Policy tick `create_helper` and `save_automation` and set
 both to Needs approval. The token's user must be an administrator (as for the definition tools).
 
 ```
 Test create_helper on the homeassistant connector. For each step report the step, the call, the reply (verbatim for refusals) and PASS or FAIL against "Expect". Do not retry a refusal with other values and do not call any tool not named.
-1. status. Expect: version 0.5.0 and a line "Helpers Claude may create: input_boolean helpers named input_boolean.claude_<name>, in the helper category Claude". Also: input_boolean has 3 entities.
+1. status. Expect: version 0.6.1; a line "Helpers Claude may create: input_boolean helpers named input_boolean.claude_<name>, in the category Claude"; and a line "Category Claude: for automations found ...; for helpers found." If it says for helpers NOT found, stop and report: the category must be created on the Helpers page first. Also: input_boolean has 3 entities.
 2. create_helper with helper_id "door__chime". Expect: refused, helper_id is 1 to 40 lower-case letters, digits and single underscores.
 3. create_helper with helper_id "Doorbell Chime" (with a space). Expect: the same refusal.
 4. search_entities with domain input_boolean. Expect: still exactly 3 (car_30, car_60, car_now): nothing was created by steps 2 and 3.
