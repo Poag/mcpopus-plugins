@@ -348,3 +348,17 @@ Tools listed only when ticked; `writable_folders` empty, blocked folder, other f
 - **Delete and move of a `.base`:** not provided in 0.6.0 (12.6). Admin tier tool in a later version, or never?
 - **Strict structure on edit** (12.4): bases carrying keys such as column widths cannot be edited until a sample of such a file is sent and the key is verified.
 - **`kanban`, `map`** views: refused until their keys are verified.
+
+### 12.10 Live results (11 November 2026, plugin 0.6.0, `writable_folders` = `Scratch`)
+
+Run by a separate agent through the connector with the prompt for checklist steps 0 to 6, and relayed by the owner; the build session did not make these calls. What the build session checked itself afterwards, with read tools: `Scratch/Probe.base` exists (205 bytes), its stored text is the expected YAML (name `Probe2`, `limit: 5`), and the sha256 of that text is `835d18409ece67edd5c34324f324c36936a22c6dc848a414992e1a10c92a3ef8`, equal to the "after" hash the edit reported. The rest is as reported.
+
+| Step | Reported result |
+| --- | --- |
+| 0 to 2 | `write_base`, `edit_base` present; vault 310 notes, 308 readable; gate `ok`, mode `hkdf`; `Index.base` parsed, 308 notes matched and 6 other files counted; no Medical path in the rows seen (first 5) |
+| 3 | Created, `sha256 before: none`, 205 bytes; `read_base` parsed it; `query_base` listed the 4 `Test/Projects` notes sorted by `file.name` |
+| 4 | Second write without `overwrite` refused, nothing written; with `overwrite=true` replaced, and the before hash equalled the earlier after hash |
+| 5 | Valid edit applied; `kanban` refused ("type must be one of table, list, cards"); missing `old_text` refused |
+| 6 | Seven writes refused with nothing stored: `Books/`, `Medical/` (a path that does not exist), `.obsidian`, `.md`, `.BASE`, invalid YAML, an unlisted view key |
+
+Not verified: the Obsidian side (desktop and phone open the base, an edit made in Obsidian syncs back, no conflict file appears in `Scratch/`), checklist step 7 (deleting in Obsidian), Medical absence beyond the first rows of the `Index.base` query, and the oversize refusal for `Large.base`. `Scratch/Probe.base` is still in the vault and has to be deleted in Obsidian (no base delete tool).
