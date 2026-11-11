@@ -273,7 +273,8 @@ class HomeAssistant:
     async def create_helper(self, name: str, initial: bool, category_name: str) -> dict[str, Any]:
         """Create one input_boolean and put it in a helper category, in one WebSocket session. The caller has validated every argument against the policy.
 
-        Nothing is changed if the category is not found. Afterwards the result says whether the entity appeared in the registry and whether the category was assigned."""
+        A helpers-scope category with the owner's configured name is created first if there is none (nothing else is ever created or changed in the category registry).
+        Afterwards the result says whether the entity appeared in the registry and whether the category was assigned."""
         self._blocked()
         if time.monotonic() < self._admin_blocked_until:
             raise self._helper_refused()
@@ -281,7 +282,7 @@ class HomeAssistant:
         ws_url = ("wss://" if s.base_url.startswith("https://") else "ws://") + s.base_url.split("://", 1)[1] + "/api/websocket"
         counter = 0
         create_sent = False
-        out: dict[str, Any] = {"item_id": "", "entity_id": "", "registered": False, "categorised": False}
+        out: dict[str, Any] = {"item_id": "", "entity_id": "", "registered": False, "categorised": False, "category_created": False}
 
         async def command(ws, payload: dict[str, Any]) -> tuple[bool, Any, str]:
             nonlocal counter
@@ -311,11 +312,19 @@ class HomeAssistant:
                     wanted = category_name.casefold()
                     cat_id = next((c["category_id"] for c in cats if isinstance(c, dict) and isinstance(c.get("category_id"), str)
                                    and str(c.get("name") or "").casefold() == wanted), None)
-                    if cat_id is None:
-                        raise HelperRefused("No helper category with the name in the claude_category setting exists in Home Assistant, so nothing was created. "
-                                            "Categories belong to one place: create one with that name on the Helpers page (Settings, Devices and services, Helpers, then the Categories filter). "
-                                            "A category of the same name for automations is a different one and does not count. Run status to see which of the two exist.")
-                    create_sent = True
+                    create_sent = True  # from here on something may have been written
+                    if cat_id is None:  # the owner named it in claude_category: make it, in the helpers scope only
+                        ok, cat, code = await command(ws, {"type": "config/category_registry/create", "scope": "helpers", "name": category_name})
+                        if not ok:
+                            if code in ("unauthorized", "forbidden"):
+                                raise self._helper_refused()
+                            raise HelperRefused("No helper category with the name in the claude_category setting exists, and Home Assistant would not create one, so nothing was created. "
+                                                "Create it on the Helpers page (Settings, Devices and services, Helpers, then the Categories filter); "
+                                                "a category of the same name for automations is a different one and does not count. Run status to see which of the two exist.")
+                        cat_id = cat.get("category_id") if isinstance(cat, dict) else None
+                        if not isinstance(cat_id, str) or not cat_id:
+                            raise HAError("Home Assistant created the category but its reply was not understood, so no helper was created. Run status, then try again.")
+                        out["category_created"] = True
                     ok, item, code = await command(ws, {"type": "input_boolean/create", "name": name, "initial": initial})
                     if not ok:
                         if code in ("unauthorized", "forbidden"):
@@ -343,12 +352,12 @@ class HomeAssistant:
             if isinstance(e, ImportError):
                 raise HAError("wsproto is missing: install the plugin's packages from its page. Nothing was created.") from None
             if isinstance(e, TimeoutError):
-                raise HAError("Home Assistant did not answer in time" + (", so the helper may or may not have been created. Check Home Assistant's helpers before trying again."
+                raise HAError("Home Assistant did not answer in time" + (", so the category or the helper may or may not have been created. Check Home Assistant's helpers before trying again."
                                                                      if create_sent else ". Nothing was created.")) from None
             self._log.warning("home assistant helper command failed: %s", type(e).__name__)
             if _cause_is_tls(e):
                 raise HAError("Home Assistant's certificate was not accepted for the WebSocket. Check ca_certificate.") from None
-            raise HAError("The WebSocket to Home Assistant failed" + (", so the helper may or may not have been created. Check Home Assistant's helpers before trying again."
+            raise HAError("The WebSocket to Home Assistant failed" + (", so the category or the helper may or may not have been created. Check Home Assistant's helpers before trying again."
                                                                   if create_sent else ". Nothing was created.")) from None
         self._states = None  # the entity list and the registry are now stale
         self._registry = None

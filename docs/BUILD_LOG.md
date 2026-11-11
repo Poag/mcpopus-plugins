@@ -3,6 +3,26 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.7.0 (create_helper creates the helpers category if it is missing)
+
+Alex, after the 0.6.0 refusal ("no helper category"): the plugin should create the category itself.
+
+### Decision and safety
+
+Done for the helpers scope only, inside `create_helper`, because the name is the owner's `claude_category` setting (never an argument), an empty helpers category grants nothing (the plugin only uses it for placement), it is one registry entry the owner can delete, it is administrator-only like the helper creation, and every other check has already passed. **Not** done for the automation scope: membership of an automation category is a permission (design 9b), so the owner makes it and fills it. Verified in Core `components/config/category_registry.py` (read 11 Nov): `config/category_registry/create` takes `scope` and `name`, is administrator-only, and returns the new `category_id`.
+
+### Changed
+
+`create_helper` lists the helpers categories; if none has the configured name (case-insensitive) it creates one (scope `helpers`, that name, no icon) in the same WebSocket session before creating the helper, and the result says it did. If Home Assistant will not list categories, nothing is guessed or created. If creating the category fails or the token's user is not an administrator, nothing else is created (the latter shares the 60 second pause). The `status` line now says create_helper will make a missing helpers category. Design 9d control 3, 5b and checklist 10g updated. Version 0.7.0.
+
+### Verified
+
+Tests (fake Home Assistant extended with `config/category_registry/create`): a missing category is created first with the configured name in the helpers scope only, once, before the helper, and the helper lands in it; an existing one, in any case, is not created again; the setting still required; nothing is created if any earlier check fails (bad id, existing entity, policy-hidden id) even with the category missing; a refused category stops everything and Home Assistant's text is not repeated; unlistable categories are not guessed at; a non-administrator is refused and paused with no category made. Eight mutation checks each made a test fail: category created in the automation scope; created even when it exists; never created; created under another name; a failed creation not stopping the helper; the administrator refusal not mapped (found by the mutation run, test added); creation not reported; unlistable categories guessed at.
+
+### Not verified
+
+On the real Home Assistant: `config/category_registry/create` for the helpers scope and the reply shape; behaviour on a duplicate name raced by the owner (Home Assistant answers `invalid_info`, shown as the refusal above).
+
 ## 2026-11-11: homeassistant 0.6.1 (status shows whether the category exists for automations and for helpers)
 
 Another session, asked to save the doorbell chime, found `input_boolean.doorbell_chime` missing and called `create_helper` (plugin 0.6.0), which refused: "No helper category with the name in the claude_category setting exists in Home Assistant, so nothing was created". It then stopped and asked the owner.

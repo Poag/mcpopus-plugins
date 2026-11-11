@@ -124,6 +124,8 @@ class FakeHA:
         self.helper_update_fails = False
         self.helper_create_error: str | None = None  # an error code to answer input_boolean/create with
         self._helper_polls: dict[str, int] = {}
+        self.category_create_calls: list[dict] = []  # every config/category_registry/create the fake accepted
+        self.category_create_fails = False
         self.helper_force_suffix = False  # Home Assistant picks a different id than the one implied by the name (a clash)
         self.delay = 0.0
         self.status_override: int | None = None
@@ -310,6 +312,22 @@ class FakeHA:
                     else:
                         entry.setdefault("categories", {}).update(msg.get("categories", {}))
                         await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": {"entity_entry": entry}})
+                elif kind == "config/category_registry/create":
+                    self.writes.append(f"WS {kind}")
+                    pool = self.helper_categories if msg.get("scope") == "helpers" else self.categories if msg.get("scope") == "automation" else None
+                    if not self.token_is_admin:
+                        err = {"code": "unauthorized", "message": "Unauthorized"}
+                    elif pool is None or self.category_create_fails or any(str(c["name"]).casefold() == str(msg.get("name")).casefold() for c in pool):
+                        err = {"code": "invalid_info", "message": "secret detail: a category with this name already exists"}
+                    else:
+                        err = None
+                    if err:
+                        await ws.send_json({"id": msg["id"], "type": "result", "success": False, "error": err})
+                    else:
+                        entry = {"category_id": f"cat_new_{len(pool) + 1}", "name": msg["name"], "icon": None}
+                        pool.append(dict(entry))
+                        self.category_create_calls.append({k: v for k, v in msg.items() if k != "id"})
+                        await ws.send_json({"id": msg["id"], "type": "result", "success": True, "result": {**entry, "created_at": 0.0, "modified_at": 0.0}})
                 elif kind == "config/category_registry/list":
                     scope = msg.get("scope")
                     ok = self.categories_supported and scope in ("automation", "helpers")

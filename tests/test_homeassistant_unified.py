@@ -100,18 +100,19 @@ async def test_status_says_whether_the_category_exists_for_automations_and_for_h
     ha.helper_categories = [{"category_id": "cat_helpers_other", "name": "Other"}]  # the category was only made for automations
     async with running_plugin(tmp_path / "b", HOME, cfg(ha, claude_category="claude"), SECRETS, policy=ALL) as (c, _, _):
         t = (await call(c, "status"))[1]
-        assert "for automations found" in t and "for helpers NOT found (create it on the Helpers page" in t
+        assert "for automations found" in t and "for helpers NOT found (create_helper will create it the first time it is used, or create it on the Helpers page" in t
         assert "Other" not in t  # other categories' names are not listed
         err, t = await call(c, "create_helper", {"helper_id": "doorbell_chime"})
-        assert err and "on the Helpers page" in t and "different one" in t and "Run status" in t and "nothing was created" in t
-    ha.categories = [{"category_id": "cat_other", "name": "Other"}]
+        assert not err and "so it was created first" in t  # and now status finds it
+        assert "for helpers found" in (await call(c, "status"))[1]
+    ha.categories, ha.helper_categories = [{"category_id": "cat_other", "name": "Other"}], []
     async with running_plugin(tmp_path / "c", HOME, cfg(ha, claude_category="Claude"), SECRETS) as (c, _, _):
         t = (await call(c, "status"))[1]
         assert "for automations NOT found (create it under Settings, Automations, Categories); for helpers NOT found" in t
     ha.categories_supported = False
     async with running_plugin(tmp_path / "d", HOME, cfg(ha, claude_category="Claude"), SECRETS) as (c, _, _):
         assert "for automations could not be checked; for helpers could not be checked" in (await call(c, "status"))[1]  # unknown is not "missing"
-    assert ha.helper_create_calls == []
+    assert len(ha.helper_create_calls) == 1
 
 
 async def test_status_has_no_category_line_when_none_is_set_and_a_category_with_no_automation_is_said_so(ha, tmp_path):

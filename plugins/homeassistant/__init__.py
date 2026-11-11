@@ -53,7 +53,7 @@ class Config(BaseModel):
     allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
     write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.* or input_boolean.doorbell_chime). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
     claude_prefix: str = Field("claude_", description="The one prefix for everything Claude creates: automation config ids it may create, change or delete must start with it, and helpers it creates are named with it (1 to 20 lower-case letters, digits and single underscores, starting with a letter). Human-written automations never match, so they cannot be changed or deleted")
-    claude_category: str = Field("", description="The one Home Assistant category Claude works in (a name, case-insensitive). Automations in it can be triggered, enabled and disabled, and helpers Claude creates are put in it. Create a category with this name in each place you use it (Settings, Automations, Categories; Settings, Devices and services, Helpers, Categories). Empty means no automation can be controlled by category and no helper can be created")
+    claude_category: str = Field("", description="The one Home Assistant category Claude works in (a name, case-insensitive). Automations in it can be triggered, enabled and disabled, and helpers Claude creates are put in it. Create a category with this name for automations (Settings, Automations, Categories); the one for helpers is created for you the first time create_helper needs it. Empty means no automation can be controlled by category and no helper can be created")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -295,7 +295,7 @@ class HomeAssistantPlugin(Plugin):
                         ("found, " + (f"{in_auto} automation(s) in it" if in_auto else "no automation is in it yet")) if any(n.casefold() == want for n in reg.categories.values())
                         else "NOT found (create it under Settings, Automations, Categories)")
                 helpers = ("could not be checked" if not reg.helper_categories_known else "found" if any(n.casefold() == want for n in reg.helper_categories.values())
-                           else "NOT found (create it on the Helpers page: Settings, Devices and services, Helpers, then the Categories filter)")
+                           else "NOT found (create_helper will create it the first time it is used, or create it on the Helpers page: Settings, Devices and services, Helpers, then the Categories filter)")
                 lines.append(f"Category {tx.clean(cfg.claude_category, 80)}: for automations {auto}; for helpers {helpers}. These are two separate categories that share a name.")
         legacy = sorted(k for k in (cfg.model_extra or {}) if k in LEGACY_SETTINGS)
         if legacy:
@@ -725,7 +725,7 @@ class HomeAssistantPlugin(Plugin):
     # ---------------------------------------------------------------- helpers
     @tool(tier="write")
     async def create_helper(self, helper_id: str, initial: bool = False) -> str:
-        """Create one on/off helper (an input_boolean) named with the owner's prefix and put it in the owner's helper category. helper_id is the name after the prefix, for example doorbell_chime (lower-case letters, digits and single underscores, up to 40). initial is whether it starts on (default off). It does not become something Claude may change until the owner allows it. Needs the token's user to be an administrator."""
+        """Create one on/off helper (an input_boolean) named with the owner's prefix and put it in the owner's category (created first in the helpers place if it does not exist). helper_id is the name after the prefix, for example doorbell_chime (lower-case letters, digits and single underscores, up to 40). initial is whether it starts on (default off). It does not become something Claude may change until the owner allows it. Needs the token's user to be an administrator."""
         cfg = self.ctx.config
         if not cfg.claude_category:
             raise ToolError("Creating helpers is not set up: the owner has not named a category in the claude_category setting.")
@@ -756,6 +756,8 @@ class HomeAssistantPlugin(Plugin):
             stats.count("helpers_created", 1)
         shown = made["entity_id"]
         lines = [f"Created the helper {shown} ({'on' if initial else 'off'} to start)."]
+        if made["category_created"]:
+            lines.append(f"There was no helper category named {tx.clean(cfg.claude_category, 80)}, so it was created first (a category in the helpers place only; automations have their own).")
         if shown != eid:
             lines.append(f"Note: Home Assistant named it {shown}, not {eid} as asked (a name clash). Check it in Home Assistant.")
         if made["categorised"]:

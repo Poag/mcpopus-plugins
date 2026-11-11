@@ -71,19 +71,73 @@ async def test_bad_ids_are_refused_before_anything_is_sent(ha, tmp_path, bad):
     assert ha.helper_create_calls == [] and ha.writes == [] and ha.ws_attempts == 0
 
 
-async def test_the_category_setting_is_required_and_the_category_must_exist(ha, tmp_path):
-    async with running_plugin(tmp_path / "a", HOME, values(ha), SECRETS, policy=ON) as (c, _, _):
+async def test_the_category_setting_is_required(ha, tmp_path):
+    async with running_plugin(tmp_path, HOME, values(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
         assert err and "not set up" in t and "has not named a category" in t and "Claude" not in t
         assert ha.ws_attempts == 0  # refused before any connection
-    async with running_plugin(tmp_path / "b", HOME, hcfg(ha, claude_category="No such category"), SECRETS, policy=ON) as (c, _, _):
+    assert ha.helper_create_calls == [] and ha.category_create_calls == [] and ha.writes == []
+
+
+async def test_a_missing_helper_category_is_created_first_in_the_helpers_scope_only(ha, tmp_path):
+    ha.helper_categories = [{"category_id": "cat_helpers_other", "name": "Other"}]
+    automation_categories = [dict(c) for c in ha.categories]
+    async with running_plugin(tmp_path, HOME, hcfg(ha, claude_category="  Doorbells  "), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
-        assert err and "No helper category" in t and "nothing was created" in t and "Other" not in t  # other category names are not listed
+        assert not err and "There was no helper category named Doorbells, so it was created first" in t and "It is in the category Doorbells" in t, t
+        err, t = await create(c, "second_flag")  # now it exists: not created again
+        assert not err and "so it was created first" not in t and "It is in the category Doorbells" in t
+    assert ha.category_create_calls == [{"type": "config/category_registry/create", "scope": "helpers", "name": "Doorbells"}]  # the configured name, the helpers scope
+    assert ha.categories == automation_categories  # no automation category was made
+    new_id = next(c["category_id"] for c in ha.helper_categories if c["name"] == "Doorbells")
+    assert [e["categories"] for e in ha.reg_entities if e["entity_id"].startswith("input_boolean.claude_")] == [{"helpers": new_id}] * 2
+    assert ha.writes[:3] == ["WS config/category_registry/create", "WS input_boolean/create", "WS config/entity_registry/update"]  # the category before the helper
+    assert [c["name"] for c in ha.helper_categories].count("Other") == 1  # nothing else touched
+
+
+async def test_an_existing_category_is_not_created_again_whatever_its_case(ha, tmp_path):
+    async with running_plugin(tmp_path, HOME, hcfg(ha, claude_category="CLAUDE"), SECRETS, policy=ON) as (c, _, _):
+        err, t = await create(c)
+        assert not err and "so it was created first" not in t
+    assert ha.category_create_calls == [] and len(ha.helper_categories) == 2
+
+
+async def test_nothing_is_created_when_any_earlier_check_fails_even_if_the_category_is_missing(ha, tmp_path):
+    ha.helper_categories = []
+    ha.states["input_boolean.claude_taken"] = st("input_boolean.claude_taken", "on", friendly_name="Taken")
+    async with running_plugin(tmp_path, HOME, hcfg(ha, claude_category="Brand new", entity_denylist=["input_boolean.claude_hidden*"]), SECRETS, policy=ON) as (c, _, _):
+        for bad in ("a__b", "taken", "hidden_one"):
+            assert (await create(c, bad))[0]
+    assert ha.category_create_calls == [] and ha.helper_categories == [] and ha.writes == []
+
+
+async def test_a_category_home_assistant_will_not_create_stops_everything_without_repeating_its_text(ha, tmp_path):
+    ha.helper_categories = []
+    ha.category_create_fails = True
+    async with running_plugin(tmp_path, HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
+        err, t = await create(c)
+        assert err and "would not create one" in t and "nothing was created" in t and "secret detail" not in t and "already exists" not in t
+    assert ha.helper_create_calls == [] and ha.category_create_calls == []
+
+
+async def test_a_non_administrator_cannot_create_the_category_either_and_is_paused(ha, tmp_path):
+    ha.helper_categories = []
+    ha.token_is_admin = False
+    async with running_plugin(tmp_path, HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
+        err, t = await create(c)
+        assert err and "refused the helper command" in t and "administrator" in t and "nothing was created" not in t.split("refused")[0]
+        attempts = ha.ws_attempts
+        err, t = await create(c, "other_flag")
+        assert err and "paused" in t and ha.ws_attempts == attempts
+    assert ha.category_create_calls == [] and ha.helper_categories == [] and ha.helper_create_calls == []
+
+
+async def test_categories_that_cannot_be_listed_are_not_guessed_at(ha, tmp_path):
     ha.categories_supported = False
-    async with running_plugin(tmp_path / "c", HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
-        assert err and "nothing was created" in t
-    assert ha.helper_create_calls == [] and ha.writes == []
+        assert err and "would not list its helper categories" in t and "nothing was created" in t
+    assert ha.category_create_calls == [] and ha.helper_create_calls == [] and ha.writes == []  # not listing is not the same as the category being absent
 
 
 async def test_existing_entities_are_not_overwritten_and_hidden_ids_look_alike(ha, tmp_path):
@@ -116,7 +170,7 @@ async def test_a_token_whose_user_is_not_an_administrator_cannot_create_and_is_p
         err, t = await create(c, "other_flag")
         assert err and "paused" in t and ha.ws_attempts == attempts  # no second attempt while paused
         assert "access token works" in (await call(c, "status"))[1]  # everything else is unaffected
-    assert ha.helper_create_calls == []
+    assert ha.helper_create_calls == [] and ha.category_create_calls == []
 
 
 async def test_a_slow_registry_is_waited_for_and_a_missing_entry_is_reported_plainly(ha, tmp_path):
