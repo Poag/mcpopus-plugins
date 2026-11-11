@@ -263,3 +263,88 @@ shown, other files, warnings).
 - Whether to accept strict refusal of unknown view keys (it will refuse bases carrying display keys we have not seen, for example column widths; send a sample and the key is added once verified).
 - Whether to list non-note rows (attachments, bases) by name, which widens what Claude can see; for now they are only counted.
 - Whether `groupBy` should be applied in a later version (it changes the order and arrangement of rows, so it is refused now).
+
+## 12. Phase 3: `write_base` and `edit_base` (0.6.0), off by default
+
+Written before the code. The owner's go-ahead was "lets proceed with phase 3" (11 Nov 2026). Checklist items 2 to 4 of 11.7 (`inFolder`, property and tag filters, `mtime`) have not been run on the real vault, so phase 2 is not fully live-verified; this is recorded, not hidden.
+
+### 12.1 Verified facts used (sources read on 11 Nov 2026)
+
+| Fact | Source |
+| --- | --- |
+| A file that is not plain text is saved as `{_id, path, ctime, mtime, size, type: "newnote", children, eden: {}}`; `type` is `plain` for a text blob and `newnote` otherwise; `size` is the byte size; `_rev` is set when replacing | livesync-commonlib `main`, `src/managers/EntryManager/EntryManagerImpls.ts` (`putDBEntryInternal`: `note.type = isTextBlob(data) ? "plain" : "newnote"`, `size: data.size`) |
+| Each chunk of a binary entry is `{_id, type: "leaf", data}` where `data` is the base64 of a slice of the file's bytes (`arrayBufferToBase64Single(buf.slice(i, splitEnd))`, each slice encoded on its own, with padding). Readers decode the `children` one by one, so the slice size is the writer's choice. Small files are one chunk | same repository, `src/string_and_binary/chunks.ts` (`splitPieces2V2`); live: the owner's four bases are `newnote` (10 Nov 2026) |
+| The chunk id is a hash of the chunk's `data` string as stored (the base64 text), exactly as for text | `createChunks`/`prepareChunk` (hash of the piece) |
+| Views: layouts `table`, `list`, `cards`, `kanban`, `map`; kanban needs `groupBy`; map needs the Maps plugin | obsidian-help `en/Bases/Views.md` (master, 11 Nov 2026) |
+| Top-level keys `filters`, `formulas`, `properties` (name to `displayName`), `summaries`; view keys `type`, `name`, `limit`, `groupBy` (`property`, `direction`), `groupOrder`, `filters`, `order`, `summaries`; views may carry other keys of their own | `en/Bases/Bases syntax.md` (master, 11 Nov 2026); `sort` seen in the owner's real files (section 10.2) |
+| A `.base` is not LiveSync-internal and not `.md`; this plugin never writes anything but `.base` here | section 1.2 |
+
+Not verified: that the owner's Obsidian and phone accept a `.base` written by this path (the live checklist, 12.8); LiveSync's behaviour when Obsidian and this plugin write the same base at once (conflicts are not merged, as for notes).
+
+### 12.2 Tools (tier `write`, off until the owner ticks them by name in the host policy)
+
+- `write_base(path, content, overwrite=False)`: creates a base. If a base exists at the path it is **refused** unless `overwrite` is true.
+- `edit_base(path, old_text, content)`: exact string replace. `old_text` must occur exactly once (not found, or more than once, is refused). No append or prepend: a base is YAML and a blind append is rarely valid.
+
+Both return: the path, the open link, `created` or `replaced` or `edited`, the size, and **`sha256 before`** (`none` for a new base) and **`sha256 after`**, hashes of the UTF-8 bytes. No content is returned or logged.
+
+### 12.3 What a path and a write must satisfy (all must hold; first failure is the message)
+
+1. The path ends in exactly `.base` (case-sensitive), is vault-relative, has no `..`, `:` or backslash segments tricks, and **no segment starts with a dot**, so `.obsidian` and every hidden folder are never reachable (the existing `validate_base_path`).
+2. The folder is in `writable_folders` and not in `blocked_folders`; both tools use the note folder switches (empty `writable_folders` means nothing is writable). A refusal says "Writing is not enabled for that folder." and does not say whether the path exists.
+3. The database gate of 4.9 passes (LiveSync generation, features, no obfuscated paths, storage mode plain or HKDF `%=`/`%$`, id scheme known).
+4. Size: the text is at most `max_base_bytes` (the same limit as reading, so a base written here can always be read back) and at most `max_write_bytes`.
+5. Text: valid UTF-8, no NUL or other control characters except tab and newline, no leading BOM. `\r\n` is converted to `\n` and a final newline is added; the response says so when it happened.
+6. The YAML parses with `parse_base` (PyYAML `SafeLoader`, one document, no anchors or aliases, no object tags, node and depth caps). If PyYAML is missing the write is refused saying why, never skipped.
+7. **The structure matches what is verified** (12.4).
+8. Overwrite and edit are checked against the revision that was read; a change made elsewhere in the meantime is refused (`409` is the final check), as for notes.
+9. At most 10 base writes a minute from this plugin, in addition to the host's per-tool limit.
+
+### 12.4 The verified structure (checked on the text a write would store)
+
+Refused, naming the first problem and never quoting the text, unless:
+
+- top level is a mapping whose keys are only `filters`, `formulas`, `properties`, `summaries`, `views`;
+- `views` is a non-empty list (at most 30) of mappings; each has `type` one of `table`, `list`, `cards` (`kanban` and `map` need keys that are not verified, so they are refused) and only the keys `type`, `name`, `filters`, `order`, `sort`, `limit`, `groupBy`, `groupOrder`, `summaries`;
+- `name` is text up to 100 characters; `limit` is a whole number from 1 to 10 000 (not true or false); `order` is a list of at most 200 texts of at most 200 characters; `sort` is a list of mappings with exactly `property` (text) and `direction` (`ASC` or `DESC`); `groupBy` is a mapping with `property` (text) and `direction` (`ASC` or `DESC`); `groupOrder` is a list of texts;
+- `filters` (global or view) is a text, or a mapping with exactly one of `and`, `or`, `not`, a non-empty list (at most 100) of texts or further such mappings, nested at most 8 deep; each text is at most 1000 characters;
+- `formulas` and `summaries` map a name to a text up to 1000 characters; `properties` maps a name to a mapping with only `displayName` (text);
+- every name and text is free of control characters.
+
+Not checked, and said in the tool description: the **expressions** inside filter, formula and summary texts (Obsidian's expression language is only partly verified, section 11), so a base can be accepted here and still show an error in Obsidian. `query_base` can then be used to see whether the plugin can evaluate it. **This also means `edit_base` refuses a base that already carries view keys outside the list** (for example column widths written by Obsidian); the result of an edit is checked, not only the change. That is the same strict rule as phase 2 and an open decision (12.9).
+
+### 12.5 The documents written
+
+Same sequence as notes: chunks first (only those not already present), then the entry document with `_rev` when replacing; one write at a time; the previous revision stays until compaction.
+
+- Entry: `{_id, path, ctime, mtime, size: <bytes>, type: "newnote", children: [...], eden: {}}`. `ctime` is kept for an existing base, `mtime` is now. The id follows the vault's learned scheme (4.9) and an existing base keeps its own id. **Extra check for bases:** if the vault already holds bases, their ids must agree with the scheme at the same 99 per cent threshold as notes, otherwise the write is refused.
+- Chunks: the UTF-8 bytes are cut at newlines into slices of at most 24 000 bytes (a 100 kB base is five chunks at most; the cut can never fall inside a base64 group because each slice is encoded alone), each slice base64-encoded with padding. An empty text is refused (a base has at least a `views` list).
+  - Plain vault: `{_id: "h:" + xxh64 id of the base64 text, type: "leaf", data: <base64>}`, the id exactly as the library computes it for any chunk.
+  - HKDF vault (`vault_status` reports `chunk_encryption: hkdf`, plain paths and ids): `{_id: "h:+<keyed id>", type: "leaf", data: "%=" + HKDF ciphertext of the base64 text, e_: true}`, as for notes; the entry document is not encrypted (plain paths, empty `eden`).
+- Before sending, the plugin decodes its own documents through the same reader that reads the vault (`Codec.assemble`, decrypting if needed) and compares the bytes with what it meant to store; a mismatch refuses the write.
+- Not handled, as for notes: conflicted revisions, internal LiveSync files.
+
+### 12.6 Delete and move: left out of this version
+
+`delete_note` and `move_note` stay note-only (`.md`); a `.base` path is refused by them. Reasons: the owner has not decided whether they belong in the admin tier (section 3), a deleted base silently breaks every `![[x.base]]` embed, and the tool set can be extended without changing the write path. Consequence for testing: a base created through Claude is deleted in Obsidian by the owner, and the "no conflict file after move and delete" item is deferred until the owner decides. Asked in 12.9.
+
+### 12.7 Tests (real host manager, real MCP client, fake CouchDB; every protection gets a mutation check)
+
+Tools listed only when ticked; `writable_folders` empty, blocked folder, other folder, `.obsidian` and any dot-folder, wrong extensions (`x.md`, `x.Base`, `x.base.md`, `x.base/`, `.base`), traversal, size limit, control characters, BOM, CRLF, invalid YAML, aliases, object tags, unknown top-level and view keys, unsupported view types, bad `limit`/`sort`/`filters` shapes; create then read back with `read_base` and `query_base`; overwrite refused by default and allowed with the flag; edit not found, ambiguous, valid, and one that makes the structure invalid; a concurrent change refused; hashes in the response equal the stored bytes; the stored documents have `type: newnote`, base64 children, `size` in bytes, a kept `ctime`; plain and HKDF modes; the gate; rate limit; nothing logged; counters; no write touches a note or any other document. CI: `tools/gen_fixtures.mjs` and `tools/verify_written.mjs` are extended so that the real octagonal-wheels code decrypts the chunks the Python writer produced for a base **and** the library's own binary decoder (`decodeBinary`) reconstructs the exact bytes.
+
+### 12.8 Live checklist (owner), to run after updating to 0.6.0, with `writable_folders` limited to `Scratch`
+
+1. Tick `write_base` and `edit_base` under Policy; set `writable_folders` to `Scratch` only; reconnect the connector.
+2. Ask Claude to create `Scratch/Probe.base` (a table view with the filter `file.inFolder("Test")` and columns `file.name`, `file.path`). Open it in Obsidian on **desktop** and on the **phone**: it must open as a base and show the notes.
+3. Edit it in Obsidian (add a column), wait for sync, ask Claude for `read_base`: the change must be there. Then ask Claude for `edit_base`, and check Obsidian shows it.
+4. Ask Claude to `write_base` the same path again without `overwrite`: refused. With `overwrite`: replaced, and no conflict file appears.
+5. A write into `Medical` or any blocked folder, and into `Test/.obsidian/x.base`: refused.
+6. Check nothing was written to `.obsidian` and no other file changed.
+7. Delete `Scratch/Probe.base` in Obsidian; `list_bases` must stop listing it.
+
+### 12.9 Decisions for the owner
+
+- **Overwrite default:** off (a write to an existing base is refused unless `overwrite` is true). Decided here as the safe default; tell me to change it.
+- **Delete and move of a `.base`:** not provided in 0.6.0 (12.6). Admin tier tool in a later version, or never?
+- **Strict structure on edit** (12.4): bases carrying keys such as column widths cannot be edited until a sample of such a file is sent and the key is verified.
+- **`kanban`, `map`** views: refused until their keys are verified.
