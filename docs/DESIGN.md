@@ -11,7 +11,7 @@ the existing connector). **Writes have only been tested against a simulated Couc
 
 | Plugin | Endpoint | State |
 | --- | --- | --- |
-| `obsidian` | `/obsidian` | read and write tools built (0.4.0: Bases `.base` files added read-only, see [DESIGN-bases.md](DESIGN-bases.md)); writes untested against real LiveSync clients (section 4.9) |
+| `obsidian` | `/obsidian` | read and write tools built (Bases `.base` files: read tools from 0.4.0, `write_base` and `edit_base` from 0.6.0, see [DESIGN-bases.md](DESIGN-bases.md)); writes untested against real LiveSync clients (section 4.9) |
 | `email` (generic IMAP) | `/email` | read tools built (0.1.1), see [email.md](email.md) |
 | `proxy` | `/<name>` | outline (section 6) |
 

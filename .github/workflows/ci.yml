@@ -51,5 +51,6 @@ jobs:
         env:
           WRITE_FIXTURES: "1"
         run: |
-          .venv/bin/python -m pytest tests/test_interop.py -q -k write_fixture
+          .venv/bin/python -m pytest tests/test_interop.py -q -k "write_fixture or write_base_fixture"
           node tools/verify_written.mjs
+          node tools/verify_written_base.mjs

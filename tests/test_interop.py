@@ -122,3 +122,37 @@ async def test_write_fixture_for_the_javascript_check(couch, tmp_path):
         "passphrase": passphrase, "pbkdf2salt": salt_b64,
         "chunks": [{"id": cid, "data": couch.docs[cid]["data"], "e_": couch.docs[cid].get("e_"), "expected": piece} for cid, piece in zip(meta["children"], pieces)],
     }))
+
+
+async def test_write_base_fixture_for_the_javascript_check(couch, tmp_path):
+    """CI only (WRITE_FIXTURES=1): have the plugin write a base into a plain and an encrypted vault and dump the documents, so that
+    tools/verify_written_base.mjs can read them back with the real LiveSync code (octagonal-wheels decodeBinary, hkdf.decrypt, xxhash)."""
+    if os.environ.get("WRITE_FIXTURES") != "1":
+        pytest.skip("set WRITE_FIXTURES=1 (CI does) to produce the fixture")
+    from livesync_writer import build_vault
+    from mcpopus.pluginconfig import Policy
+
+    passphrase = "writer-test-passphrase"
+    # long enough for several chunks, with multi-byte characters near the cut points
+    text = ("formulas:\n" + "".join(f"  f{i}: '" + "café ☕ 日本語 🐙 " * 12 + f"{i}'\n" for i in range(200)) + "views:\n  - type: table\n    name: Probe\n")
+    assert 50_000 < len(text.encode()) < 100_000  # over two 24 kB chunks, under the 100 kB base limit
+    out = {"passphrase": passphrase, "text": text, "plain": None, "encrypted": None}
+    for mode, key in (("plain", "plain"), ("e2ee", "encrypted")):
+        docs = build_vault(mode, passphrase)
+        couch.docs.clear()
+        couch.changes.clear()
+        couch.load(docs)
+        values = {"couchdb_url": couch.url, "database": "vault", "username": "alex", "writable_folders": ["Scratch"]}
+        secrets = {"password": "couch-pass-123", **({"passphrase": passphrase} if mode == "e2ee" else {})}
+        async with running_plugin(tmp_path / mode, "obsidian", values, secrets, policy=Policy(read_only=False, enable_tools=["write_base"])) as (c, _, _):
+            res = await c.call_tool("write_base", {"path": "Scratch/Probe.base", "content": text})
+            assert not res.is_error, res.content[0].text
+        meta = couch.docs["scratch/probe.base"]
+        assert meta["type"] == "newnote" and meta["size"] == len(text.encode()) and len(meta["children"]) > 1
+        entry = {"meta": {k: meta[k] for k in ("_id", "path", "size", "type", "children", "eden")},
+                 "chunks": [{"id": cid, "data": couch.docs[cid]["data"], "e_": couch.docs[cid].get("e_")} for cid in meta["children"]]}
+        if mode == "e2ee":
+            entry["pbkdf2salt"] = next(d["pbkdf2salt"] for d in docs if d.get("type") == "sync-parameters")
+        out[key] = entry
+    FIX.mkdir(parents=True, exist_ok=True)
+    (FIX / "written_base_by_plugin.json").write_text(json.dumps(out))

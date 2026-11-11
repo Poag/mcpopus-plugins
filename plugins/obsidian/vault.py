@@ -355,6 +355,15 @@ class Vault:
         if not self.can_write_path(path):
             raise WriteRefused("Writing is not enabled for that folder.")
 
+    def check_base_writable(self, path: str) -> None:
+        validate_base_path(path)
+        if not self.can_write_path(path):
+            raise WriteRefused("Writing is not enabled for that folder.")
+
+    def _existing_base(self, path: str) -> NoteMeta | None:
+        key = nfc(path)
+        return self.bases.get(key) or next((m for k, m in self.bases.items() if k.casefold() == key.casefold()), None)
+
     def _scheme(self) -> tuple[bool, bool] | None:
         """(case_sensitive, nfc) as this vault derives note ids, learned from existing notes; None if it cannot be told."""
         metas = [m for m in self.notes.values() if not m.obfuscated]
@@ -467,6 +476,62 @@ class Vault:
             await self.couch.put_doc(meta)
         await self.refresh(force=True)
         return self._existing(path)  # type: ignore[return-value]
+
+    async def put_base(self, path: str, data: bytes, *, base_rev: str | None = None, must_exist: bool = False,
+                       must_not_exist: bool = False) -> NoteMeta:
+        """Create or replace a .base file as a LiveSync binary ("newnote") entry. Same safety rules as put_note."""
+        if len(data) > min(self.max_write_bytes, self.max_base_bytes):
+            raise WriteRefused("That base is larger than the configured limit.")
+        async with self._write_lock:
+            self.check_base_writable(path)
+            await self._prepare_base_write(path)
+            await self.refresh(force=True)
+            existing = self._existing_base(path)
+            if must_exist and existing is None:
+                raise PathError("No such base.")
+            if must_not_exist and existing is not None:
+                raise PathError("A base already exists at that path.")
+            if base_rev is not None and (existing is None or existing.rev != base_rev):
+                raise Conflict("the base was changed by someone else since it was read; read it again and retry")
+            if existing:
+                doc_id = existing.doc_id
+            else:
+                cs, use_nfc = self._scheme() or (False, False)
+                doc_id = writer.note_id(path, case_sensitive=cs, nfc=use_nfc)
+            cur = await self.couch.get_doc(doc_id)
+            if existing is None and cur and not (cur.get("deleted") or cur.get("_deleted")):
+                raise PathError("Something else already uses that name.")
+            now = int(time.time() * 1000)
+            created = existing.ctime if existing else (cur or {}).get("ctime") or now
+            enc = key = None
+            if self.write_mode == "hkdf":
+                salt, phrase = self.codec.pbkdf2_salt, self.passphrase or ""
+                enc, key = (lambda piece: crypto.encrypt_hkdf(piece, phrase, salt)), writer.id_key(phrase)
+            chunks, meta = await asyncio.to_thread(
+                lambda: writer.build_binary(existing.path if existing else path, data, doc_id, ctime=int(created), mtime=now, encrypt=enc, key=key))
+            # never send what the reader of this vault would not give back byte for byte
+            back = await asyncio.to_thread(lambda: b"".join(base64.b64decode(self.codec.decode_chunk(c)) for c in chunks))
+            if back != data or meta["size"] != len(data):
+                raise WriteRefused("Writing is not available: an internal check of the data failed.")
+            if cur:
+                meta["_rev"] = cur["_rev"]
+            unique = list({c["_id"]: c for c in chunks}.values())
+            present = await self.couch.existing_ids([c["_id"] for c in unique])
+            await self.couch.bulk_write([c for c in unique if c["_id"] not in present])
+            await self.couch.put_doc(meta)
+        await self.refresh(force=True)
+        return self._existing_base(path)  # type: ignore[return-value]
+
+    async def _prepare_base_write(self, path: str) -> None:
+        await self.ensure_ready()
+        reason = await self.write_gate()
+        if reason:
+            raise WriteRefused(f"Writing is not available: {reason}.")
+        # the ids of the bases already stored must follow the scheme used for the new one
+        scheme = self._scheme() or (False, False)
+        known = [m for m in self.bases.values() if not m.obfuscated]
+        if known and sum(writer.note_id(m.path, case_sensitive=scheme[0], nfc=scheme[1]) == m.doc_id for m in known) < max(1, int(len(known) * 0.99)):
+            raise WriteRefused("Writing is not available: the bases in this vault are named differently from its notes, so a new base could not be named safely.")
 
     async def soft_delete(self, path: str, *, base_rev: str | None = None) -> None:
         """LiveSync's default delete: the note document stays, marked deleted, so every device removes the file."""

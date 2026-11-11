@@ -30,7 +30,7 @@ async def test_tools_are_read_only_and_listed(couch, tmp_path):
         names = sorted(t.name for t in (await c.list_tools()).tools)
         assert names == ["get_note_metadata", "list_bases", "list_folders", "list_notes", "list_tags", "query_base", "read_base", "read_note", "search_notes", "vault_status"]  # list_bases and read_base: 0.4.0; query_base: 0.5.0
         assert all(m.tier == "read" for m in lp.declared if m.kind == "tool" and m.name in lp.tools)  # nothing else is served
-        assert {m.name: m.tier for m in lp.declared if m.tier != "read"} == {"write_note": "write", "edit_note": "write", "move_note": "write", "delete_note": "admin"}
+        assert {m.name: m.tier for m in lp.declared if m.tier != "read"} == {"write_note": "write", "edit_note": "write", "move_note": "write", "delete_note": "admin", "write_base": "write", "edit_base": "write"}
 
 
 async def test_read_search_list_plain_vault(couch, tmp_path):

@@ -7,7 +7,7 @@ later check what a base would show, and, only if the owner opts in, write them. 
 | --- | --- | --- | --- |
 | 1 | 0.4.0, 0.4.1 | `list_bases`, `read_base` (read); `.base` counts in `vault_status`; base links resolve in `get_note_metadata` | built, tested against fakes, not yet run on the real vault |
 | 2 | 0.5.1 | `query_base` (read): what a base would show, from a verified subset | built; first live run 10 Nov 2026 (`file.name` corrected in 0.5.1); checklist items 2 to 4 still open (section 11) |
-| 3 | later | `write_base`, `edit_base` (write, off by default) | not started; waits for the owner to confirm phases 1 and 2 |
+| 3 | 0.6.0 | `write_base`, `edit_base` (write, off by default) | built and tested against fakes and the real LiveSync JavaScript code (CI interop job); **not yet run on the real vault** (section 12.8) |
 
 Existing tools keep their names and behaviour. `.base` paths are never accepted by `read_note`, `write_note` and the other note tools.
 

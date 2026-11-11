@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import time
 from collections import Counter
@@ -13,7 +14,7 @@ from pydantic import field_validator
 
 import datetime as dt
 
-from .bases import base_links, parse_base, summarise
+from .bases import BaseInvalid, base_links, normalise_base_text, parse_base, summarise, validate_base_structure
 from .basequery import SUPPORTED_LINE, Budget, NoSuchView, Unsupported, cell, column_value, plan_base, run_query
 from .couch import Conflict, CouchDB, CouchError
 from .livesync import LiveSyncError, NoteMeta
@@ -31,7 +32,7 @@ class Config(BaseModel):
     vault_name: str = Field("Vault", max_length=80, description="Vault name for obsidian:// links")
     readable_folders: list[str] = Field([], description="Only these folders can be read (one per line). Empty means the whole vault")
     blocked_folders: list[str] = Field([], description="These folders are never readable, whatever else is set (one per line), e.g. Medical")
-    writable_folders: list[str] = Field([], description="Folders where write tools may create, change, move and delete notes (one per line). Empty means nothing is writable. The host policy must also enable the write tools by name")
+    writable_folders: list[str] = Field([], description="Folders where write tools may create, change, move and delete notes, and create and change bases (one per line). Empty means nothing is writable. The host policy must also enable the write tools by name")
     max_write_bytes: int = Field(1_000_000, ge=1_000, le=20_000_000, description="Largest note a write may store")
     instructions: str = Field("", max_length=4000, description="Text shown to the AI client with this connector (how your vault is organised, conventions to follow). Do not put secrets here")
     max_note_bytes: int = Field(2_000_000, ge=1_000, le=50_000_000, description="Notes larger than this are not read")
@@ -72,6 +73,7 @@ class Obsidian(Plugin):
         super().__init__(ctx)
         self.vault = vault
         self.warm: asyncio.Task | None = None
+        self._base_writes: list[float] = []
         self.instructions = (ctx.config.instructions or "").strip() or None  # the host passes this to the MCP server
 
     # ------------------------------------------------------------- plumbing
@@ -388,6 +390,88 @@ class Obsidian(Plugin):
         saved = await self._write(self.vault.move(from_path, to_path))
         self._count("notes_moved")
         return f"Moved: {from_path} -> {saved.path}\n[Open in Obsidian]({self._link(saved.path)})"
+
+    # ---- bases: the same switches as notes, and a stricter check of what is stored (docs/DESIGN-bases.md section 12)
+    def _base_rate(self) -> None:
+        now = time.monotonic()
+        self._base_writes = [t for t in self._base_writes if now - t < 60]
+        if len(self._base_writes) >= 10:
+            raise ToolError("Too many base writes in the last minute. Try again shortly.")
+        self._base_writes.append(now)
+
+    async def _checked_base(self, text: str) -> tuple[str, bytes, bool]:
+        try:
+            clean, changed = normalise_base_text(text)
+            data = clean.encode("utf-8")
+            if len(data) > min(self.vault.max_write_bytes, self.vault.max_base_bytes):
+                raise BaseInvalid("the base is larger than the configured limit")
+            parsed = await asyncio.to_thread(parse_base, clean)
+            if parsed.status != "ok":
+                raise BaseInvalid(f"it is not accepted as YAML ({parsed.status}: {parsed.reason})")
+            validate_base_structure(parsed.data)
+        except BaseInvalid as e:
+            raise ToolError(f"Not written: {e}. Nothing was stored.") from None
+        return clean, data, changed
+
+    @staticmethod
+    def _sha(data: bytes | None) -> str:
+        return hashlib.sha256(data).hexdigest() if data is not None else "none"
+
+    def _base_report(self, verb: str, meta: NoteMeta, before: bytes | None, after: bytes, changed: bool) -> str:
+        note = "\nLine ends were converted to LF and a final newline added." if changed else ""
+        return (f"Base {verb}: {meta.path} ({len(after)} bytes)\n[Open in Obsidian]({self._base_open_link(meta.path)})\n"
+                f"sha256 before: {self._sha(before)}\nsha256 after: {self._sha(after)}{note}\n"
+                "Only the structure was checked; expressions inside filters and formulas are not. Use query_base to see what the plugin can evaluate.")
+
+    @tool(tier="write")
+    async def write_base(self, path: str, content: str, overwrite: bool = False) -> str:
+        """Create an Obsidian Base (.base file) from YAML text. An existing base is refused unless overwrite is true. Only documented structure is accepted: views of type table, list or cards, and the keys filters, formulas, properties, summaries, views; the expressions inside filters and formulas are not checked."""
+        v = self.vault
+        try:
+            v.check_base_writable(path)
+            await v.ensure_ready()
+        except (PathError, WriteRefused, CouchError, LiveSyncError) as e:
+            raise ToolError(str(e)) from None
+        clean, data, changed = await self._checked_base(content)
+        existing = v._existing_base(path)
+        before = None
+        rev = None
+        if existing is not None:
+            if overwrite is not True:
+                raise ToolError("A base already exists at that path. Nothing was written. Use overwrite=true to replace it.")
+            try:
+                meta, old = await v.read_base(existing.path)
+            except (PathError, LiveSyncError, CouchError) as e:
+                raise ToolError(str(e)) from None
+            before, rev = old.encode("utf-8"), meta.rev
+        self._base_rate()
+        saved = await self._write(v.put_base(path, data, base_rev=rev, must_exist=existing is not None, must_not_exist=existing is None))
+        self._count("bases_replaced" if existing else "bases_created")
+        self._count("bytes_written", len(data))
+        return self._base_report("replaced" if existing else "created", saved, before, data, changed)
+
+    @tool(tier="write")
+    async def edit_base(self, path: str, old_text: str, content: str) -> str:
+        """Change part of an existing Obsidian Base (.base file): old_text must match exactly once and is replaced by content. The whole result must still be accepted structure (see write_base)."""
+        v = self.vault
+        if not old_text:
+            raise ToolError("old_text is required.")
+        try:
+            v.check_base_writable(path)
+            meta, text = await v.read_base(path)
+        except (PathError, WriteRefused, CouchError, LiveSyncError) as e:
+            raise ToolError(str(e)) from None
+        first = text.find(old_text)
+        if first == -1:
+            raise ToolError("old_text was not found in the base.")
+        if text.find(old_text, first + 1) != -1:
+            raise ToolError("old_text matches more than once. Give a longer, unique string.")
+        clean, data, changed = await self._checked_base(text[:first] + content + text[first + len(old_text):])
+        self._base_rate()
+        saved = await self._write(v.put_base(path, data, base_rev=meta.rev, must_exist=True))
+        self._count("bases_edited")
+        self._count("bytes_written", len(data))
+        return self._base_report("edited", saved, text.encode("utf-8"), data, changed)
 
     @tool(tier="admin")
     async def delete_note(self, path: str) -> str:

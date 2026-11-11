@@ -128,7 +128,7 @@ async def test_new_tools_are_read_tier_and_existing_tools_remain(couch, tmp_path
         assert names == ["get_note_metadata", "list_bases", "list_folders", "list_notes", "list_tags", "query_base", "read_base", "read_note", "search_notes", "vault_status"]
         tiers = {m.name: m.tier for m in lp.declared if m.kind == "tool"}
         assert tiers["list_bases"] == tiers["read_base"] == tiers["query_base"] == "read"
-        assert {n: t for n, t in tiers.items() if t != "read"} == {"write_note": "write", "edit_note": "write", "move_note": "write", "delete_note": "admin"}
+        assert {n: t for n, t in tiers.items() if t != "read"} == {"write_note": "write", "edit_note": "write", "move_note": "write", "delete_note": "admin", "write_base": "write", "edit_base": "write"}
         assert {m.name for m in lp.declared if m.kind == "tool" and m.untrusted} >= {"list_bases", "read_base", "query_base"}
 
 

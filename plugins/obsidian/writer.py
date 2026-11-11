@@ -12,6 +12,7 @@ choice (readers follow `children`); this one cuts at line ends into pieces of at
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import re
@@ -22,6 +23,7 @@ from typing import Any
 from .xxh64 import xxh64
 
 CHUNK_CHARS = 1000
+CHUNK_BYTES = 24_000  # binary (newnote) entries: bytes per chunk before base64
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 _LINES = re.compile(r"[^\n]*\n|[^\n]+")
 
@@ -95,4 +97,34 @@ def build(path: str, text: str, doc_id: str, *, ctime: int, mtime: int, encrypt:
         chunks = [{"_id": i, "type": "leaf", "data": p} for i, p in zip(ids, pieces)]
     meta = {"_id": doc_id, "path": path, "ctime": ctime, "mtime": mtime, "size": len(text.encode("utf-8")),
             "type": "plain", "children": ids, "eden": {}}
+    return chunks, meta
+
+
+def split_bytes(data: bytes) -> list[bytes]:
+    """Cut at newlines into slices of at most CHUNK_BYTES. Readers decode every chunk alone and join the bytes, so any cut is valid."""
+    pieces: list[bytes] = []
+    start = 0
+    while start < len(data):
+        end = min(start + CHUNK_BYTES, len(data))
+        if end < len(data):
+            cut = data.rfind(b"\n", start, end)
+            if cut > start:
+                end = cut + 1
+        pieces.append(data[start:end])
+        start = end
+    return pieces
+
+
+def build_binary(path: str, data: bytes, doc_id: str, *, ctime: int, mtime: int, encrypt: Callable[[str], str] | None = None,
+                 key: bytes | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """A non-text file as LiveSync stores it: type "newnote", every chunk the base64 of a slice of the bytes, size in bytes.
+    The chunk id hashes the stored (base64) text, exactly as for any chunk."""
+    texts = [base64.b64encode(p).decode("ascii") for p in split_bytes(data)]
+    if encrypt is not None:
+        ids = [secret_chunk_id(t, key or b"") for t in texts]
+        chunks = [{"_id": i, "type": "leaf", "data": encrypt(t), "e_": True} for i, t in zip(ids, texts)]
+    else:
+        ids = [chunk_id(t) for t in texts]
+        chunks = [{"_id": i, "type": "leaf", "data": t} for i, t in zip(ids, texts)]
+    meta = {"_id": doc_id, "path": path, "ctime": ctime, "mtime": mtime, "size": len(data), "type": "newnote", "children": ids, "eden": {}}
     return chunks, meta

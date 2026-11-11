@@ -84,6 +84,138 @@ def parse_base(text: str) -> ParseResult:
     return ParseResult("ok", data)
 
 
+# ------------------------------------------------------------ write checks
+class BaseInvalid(ValueError):
+    """The text is not a base this plugin will store. The message names the problem and never quotes the text."""
+
+
+WRITE_TOP_KEYS = ("filters", "formulas", "properties", "summaries", "views")
+WRITE_VIEW_TYPES = ("table", "list", "cards")
+WRITE_VIEW_KEYS = ("type", "name", "filters", "order", "sort", "limit", "groupBy", "groupOrder", "summaries")
+MAX_WRITE_VIEWS = 30
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def normalise_base_text(text: str) -> tuple[str, bool]:
+    """Text as it will be stored: valid characters only, LF line ends, one final newline. Returns (text, changed)."""
+    if not text or not text.strip():
+        raise BaseInvalid("the base is empty")
+    if text.startswith("\ufeff"):
+        raise BaseInvalid("the text starts with a byte order mark")
+    out = text.replace("\r\n", "\n")
+    if _CONTROL.search(out) or "\r" in out:
+        raise BaseInvalid("the text contains control characters")
+    if not out.endswith("\n"):
+        out += "\n"
+    return out, out != text
+
+
+def _text(value: Any, what: str, limit: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > limit or _CONTROL.search(value):
+        raise BaseInvalid(f"{what} must be text of 1 to {limit} characters without control characters")
+    return value
+
+
+def _check_filter(node: Any, what: str, depth: int = 0) -> None:
+    if depth > 8:
+        raise BaseInvalid(f"{what} is nested too deeply")
+    if isinstance(node, str):
+        _text(node, what, 1000)
+        return
+    if isinstance(node, dict) and len(node) == 1 and next(iter(node)) in ("and", "or", "not"):
+        children = next(iter(node.values()))
+        if not isinstance(children, list) or not children or len(children) > 100:
+            raise BaseInvalid(f"{what}: and, or and not need a list of 1 to 100 entries")
+        for c in children:
+            _check_filter(c, what, depth + 1)
+        return
+    raise BaseInvalid(f"{what} must be text, or one of and, or, not holding a list")
+
+
+def _direction(value: Any, what: str) -> None:
+    if value not in ("ASC", "DESC"):
+        raise BaseInvalid(f"{what} direction must be ASC or DESC")
+
+
+def validate_base_structure(data: Any) -> None:
+    """Raise BaseInvalid unless the parsed base uses only the structure verified in docs/DESIGN-bases.md (12.4). Expressions are not parsed."""
+    if not isinstance(data, dict):
+        raise BaseInvalid("the top level must be a mapping")
+    for key in data:
+        if key not in WRITE_TOP_KEYS:
+            raise BaseInvalid("a top-level key is not one of filters, formulas, properties, summaries, views")
+    if "filters" in data:
+        _check_filter(data["filters"], "the global filters")
+    for section in ("formulas", "summaries"):
+        if section in data:
+            block = data[section]
+            if not isinstance(block, dict) or len(block) > 200:
+                raise BaseInvalid(f"{section} must be a mapping of up to 200 entries")
+            for k, v in block.items():
+                _text(k, f"a {section} name", 100)
+                _text(v, f"a {section} entry", 1000)
+    if "properties" in data:
+        block = data["properties"]
+        if not isinstance(block, dict) or len(block) > 200:
+            raise BaseInvalid("properties must be a mapping of up to 200 entries")
+        for k, v in block.items():
+            _text(k, "a property name", 200)
+            if not isinstance(v, dict) or set(v) - {"displayName"}:
+                raise BaseInvalid("a property may only have displayName")
+            if "displayName" in v:
+                _text(v["displayName"], "displayName", 200)
+    views = data.get("views")
+    if not isinstance(views, list) or not views or len(views) > MAX_WRITE_VIEWS:
+        raise BaseInvalid(f"views must be a list of 1 to {MAX_WRITE_VIEWS} views")
+    for i, view in enumerate(views, 1):
+        n = f"view {i}"
+        if not isinstance(view, dict):
+            raise BaseInvalid(f"{n} must be a mapping")
+        for key in view:
+            if key not in WRITE_VIEW_KEYS:
+                raise BaseInvalid(f"{n} has a key that is not one of {', '.join(WRITE_VIEW_KEYS)}")
+        if view.get("type") not in WRITE_VIEW_TYPES:
+            raise BaseInvalid(f"{n} type must be one of {', '.join(WRITE_VIEW_TYPES)}")
+        if "name" in view:
+            _text(view["name"], f"{n} name", 100)
+        if "limit" in view and (isinstance(view["limit"], bool) or not isinstance(view["limit"], int) or not 1 <= view["limit"] <= 10_000):
+            raise BaseInvalid(f"{n} limit must be a whole number from 1 to 10000")
+        if "filters" in view:
+            _check_filter(view["filters"], f"{n} filters")
+        if "order" in view:
+            if not isinstance(view["order"], list) or len(view["order"]) > 200:
+                raise BaseInvalid(f"{n} order must be a list of up to 200 property names")
+            for c in view["order"]:
+                _text(c, f"{n} order entry", 200)
+        if "sort" in view:
+            if not isinstance(view["sort"], list) or len(view["sort"]) > 20:
+                raise BaseInvalid(f"{n} sort must be a list of up to 20 entries")
+            for s in view["sort"]:
+                if not isinstance(s, dict) or set(s) != {"property", "direction"}:
+                    raise BaseInvalid(f"{n} sort entries need exactly property and direction")
+                _text(s["property"], f"{n} sort property", 200)
+                _direction(s["direction"], f"{n} sort")
+        if "groupBy" in view:
+            g = view["groupBy"]
+            if not isinstance(g, dict) or set(g) != {"property", "direction"}:
+                raise BaseInvalid(f"{n} groupBy needs exactly property and direction")
+            _text(g["property"], f"{n} groupBy property", 200)
+            _direction(g["direction"], f"{n} groupBy")
+        if "groupOrder" in view:
+            if not isinstance(view["groupOrder"], list) or len(view["groupOrder"]) > 200:
+                raise BaseInvalid(f"{n} groupOrder must be a list of up to 200 texts")
+            for c in view["groupOrder"]:
+                if not isinstance(c, str) or len(c) > 200 or _CONTROL.search(c):
+                    raise BaseInvalid(f"{n} groupOrder entries must be short text")
+        if "summaries" in view:
+            sm = view["summaries"]
+            if not isinstance(sm, dict) or len(sm) > 200:
+                raise BaseInvalid(f"{n} summaries must be a mapping of up to 200 entries")
+            for k, v in sm.items():
+                _text(k, f"{n} summaries property", 200)
+                _text(v, f"{n} summaries entry", 200)
+
+
 _FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(?:(.*?)\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.S)
 MAX_FRONTMATTER_CHARS = 65_536
 
