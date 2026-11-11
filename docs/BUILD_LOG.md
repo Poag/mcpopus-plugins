@@ -86,6 +86,7 @@ Everything in Prompt A and B against the real Home Assistant (waits for the owne
 ## 2026-11-11: obsidian 0.6.0, first live run of write_base and edit_base
 
 Run by a separate agent through the connector, relayed by the owner (section 12.10 of DESIGN-bases.md has the table). Steps 0 to 6 passed as reported: create, overwrite refused by default and allowed with the flag, edits, and seven refusals (`Books/`, a nonexistent `Medical/` path, `.obsidian`, wrong extensions, invalid YAML, an unlisted view key) with nothing stored. Checked by the build session with read tools: `Scratch/Probe.base` holds the expected 205 bytes and its sha256 equals the hash the last edit reported. A connector refresh in claude.ai and a new session were needed before the new tools appeared (an existing session keeps the tool list it started with). Not verified: Obsidian desktop and phone, an edit made in Obsidian syncing back, no conflict file, deletion in Obsidian. The owner still has to delete `Scratch/Probe.base`.
+Later the same day the owner opened the base in Obsidian and added a `file.size` column; the plugin read it back (223 bytes) and `query_base` evaluated it, so Obsidian to database to plugin works for a base. The phone, the row comparison and the reverse direction are not confirmed.
 
 ## 2026-11-11: obsidian 0.6.0 (Bases phase 3: write_base and edit_base, off by default)
 
