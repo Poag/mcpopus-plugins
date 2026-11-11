@@ -97,11 +97,15 @@ async def watched(imap, tmp_path, fire, **extra):
             transport = Redirecting(port, imap.cert_pem)
             lp.plugin.http._transport = transport  # the plugin's own client, with its own settings, now talks to the fake
             lp.plugin.poller.notifier.http = httpx2.AsyncClient(transport=transport, timeout=10, follow_redirects=False)
-            for _ in range(300):
-                if poller.ticks >= 1:
-                    break
-                await asyncio.sleep(0.02)
-            assert poller.ticks >= 1
+            # `ticks` counts checks that have *started*, so it is 1 while the baseline is still being taken; a test that then adds mail
+            # races the baseline (mail added to a folder not yet looked at lands inside it and is never reported). Wait for the check
+            # itself: it holds the poller's lock from its start to its end, so taking the lock waits for it to finish.
+            async with asyncio.timeout(30):
+                while poller.ticks < 1:
+                    await asyncio.sleep(0.01)
+                async with poller._lock:
+                    pass
+            assert poller.ticks == 1 and poller.last_result != "no check yet" and poller.state  # the baseline is complete, and no second check ran
             yield c, poller, transport
 
 

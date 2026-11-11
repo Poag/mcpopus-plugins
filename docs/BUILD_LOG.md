@@ -3,6 +3,27 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: email notification tests made deterministic (no plugin change, still 0.3.0)
+
+Two flaky tests: CI run 45 (commit afb0d05) failed `test_first_check_only_sets_a_baseline_then_new_mail_is_reported_once` (first event had count 1, INBOX [3] only, expected count 2 with Projects/work [11]); a local full run failed `test_only_two_hundred_ids_wait_and_the_oldest_go_first` (passes alone).
+
+### Cause
+
+The test helper `watched()` waited for `poller.ticks >= 1`. `Poller.tick` increments `ticks` as its first step, before the IMAP poll, so the helper returned while the baseline check was still running in the background task. The test then added mail, and a folder the baseline had not yet opened took the new message into its baseline (never reported); the test's own `tick()` call also queued behind the baseline on the lock. Under load the window is wide; alone it is rarely hit. Not a plugin defect: `ticks` is documented as checks started ("N checks so far" in `mailbox_status`), and each tick runs under a lock, one at a time.
+
+### Changed
+
+- `tests/test_email_notify.py`, `watched()`: after the first tick has started, take the poller's lock (held for the whole check), then assert the baseline is complete (`ticks == 1`, `last_result` set, `state` filled). It waits on the condition, not on time; the only timeout is a 30 s guard. No assertion in any test was changed or loosened.
+- No plugin change, so `plugins/email/plugin.toml` stays at 0.3.0.
+
+### Verified
+
+Before: with 8 busy CPU loops running, the baseline test failed in 1 of 30 runs of the two tests. After: the whole file (25 tests) passed 30 of 30 runs under the same load, and the full suite (`python -m pytest -q`, 4 busy loops running) passed: 477 passed, 11 skipped, 4 min.
+
+### Not verified
+
+CI on GitHub after the push (see the session report). The second failure was not reproduced before the change (it shares the cause: it also starts from `watched()`); it did not fail in the 30 loaded runs after.
+
 ## 2026-11-11: homeassistant 0.6.0 (one prefix and one category for everything Claude works in)
 
 Alex asked to unify the categories Claude works in into one field and one prefix, reused in all areas. Design section 5b; 0.6.0 is a settings change, no new tool.
