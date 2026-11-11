@@ -125,6 +125,10 @@ Everything in Prompt A and B against the real Home Assistant (waits for the owne
 1. The 10 Nov settings change (7 services on `light.*` earlier, 0 after the update): intended or reset?
 2. Use an explicit write list (outside and inside porch) instead of `light.*`, so the nursery light can never be a target?
 
+## 2026-11-11: obsidian 0.6.1, second live run (kanban created; file.name not tested)
+
+Run by a separate agent, relayed by the owner (DESIGN-bases.md 12.12). Kanban creation and its refusals, overwrite, edit and path refusals passed as reported. The vault had changed (the `Test/` fixtures and `Scratch/kanban.base` were gone, `writable_folders` widened to `scratch`, `claude`, `books`), so step 4, the live test of the 0.6.1 `file.name` rule, could not run. The build session checked the stored text and sha256 of both bases it could read after the run and they match the reported hashes. Open: that test with a fixture that exists now (filter `file.name == "kanban2.base"`), and Obsidian's view of the kanban base.
+
 ## 2026-11-11: obsidian 0.6.1 (file.name of non-notes, kanban views)
 
 Owner findings: a filter `file.name == "Index.base"` gave one row in Obsidian (so a non-note keeps its extension in `file.name`; 0.5.1 to 0.6.0 used the basename for all files, which affected only the count of other files); `Scratch/Probe.base` opens on the phone and was deleted in Obsidian; the owner asked for a kanban base, and `Scratch/kanban.base` was already in the vault (Obsidian's shape: type, name, groupBy, order; the build session did not create it). Changes: `file.name` is the basename for notes and the full name otherwise; `kanban` is an accepted view type for `write_base` and `edit_base` and must have `groupBy`; `map` is still refused. Tests changed and added, each change with a mutation check that made a test fail (name always basename, name always with extension, kanban without groupBy accepted, `map` accepted). Section 12.11 of DESIGN-bases.md has the details and what is still unverified.
