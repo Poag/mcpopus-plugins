@@ -78,6 +78,9 @@ class FakeImap:
         self.user, self.password = user, password
         self.boxes: dict[str, dict] = {}  # wire name -> {"attrs": str, "msgs": [Msg]}
         self.commands: list[str] = []
+        self.examined: list[str] = []  # every folder opened with EXAMINE
+        self.validity = 777
+        self.announce_uidnext = True  # some servers do not send UIDNEXT when a folder is opened
         self.logins = 0
         self.port = 0
         self._server: asyncio.AbstractServer | None = None
@@ -86,6 +89,7 @@ class FakeImap:
         (self._dir / "c.pem").write_text(self.cert_pem)
         (self._dir / "k.pem").write_bytes(self._key_pem)
         self.list_style = "normal"  # normal | atoms | empty | no_inbox | percent_only
+        self.boxes_current: list[Msg] = []
         self.fail_with: str | None = None  # "drop" closes the connection after login
 
     def add(self, box: str, attrs: str = "", msgs: list[Msg] | None = None) -> None:
@@ -165,7 +169,10 @@ class FakeImap:
                         send(f"{tag} NO [NONEXISTENT] Unknown Folder\r\n")
                     else:
                         state["box"] = name
-                        send(f"* {len(self.boxes[name]['msgs'])} EXISTS\r\n", "* OK [UIDVALIDITY 777] ok\r\n", f"{tag} OK [READ-ONLY] examined\r\n")
+                        self.examined.append(name)
+                        top = max((m.uid for m in self.boxes[name]["msgs"]), default=0)
+                        send(f"* {len(self.boxes[name]['msgs'])} EXISTS\r\n", f"* OK [UIDVALIDITY {self.validity}] ok\r\n",
+                             *([f"* OK [UIDNEXT {top + 1}] predicted\r\n"] if self.announce_uidnext else []), f"{tag} OK [READ-ONLY] examined\r\n")
                 elif up == "UID":
                     self._uid(tag, args, state, send)
                 else:
@@ -182,6 +189,12 @@ class FakeImap:
             k = crit[i].upper()
             if k == "ALL":
                 i += 1
+            elif k == "UID":  # "n:*" as real servers answer it: everything from n up, or the last message when nothing is that high
+                low = int(crit[i + 1].split(":")[0])
+                top = max((x.uid for x in self.boxes_current), default=0)
+                if not (m.uid >= low or (top < low and m.uid == top)):
+                    return False
+                i += 2
             elif k == "UNSEEN":
                 if "\\Seen" in m.flags:
                     return False
@@ -214,6 +227,7 @@ class FakeImap:
             t = tokens(rest)
             if t[:2] == ["CHARSET", "UTF-8"]:
                 t = t[2:]
+            self.boxes_current = box["msgs"]
             try:
                 hits = [str(m.uid) for m in box["msgs"] if self._match(m, t)]
             except ValueError:

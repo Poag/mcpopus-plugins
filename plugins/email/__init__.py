@@ -5,10 +5,12 @@ from __future__ import annotations
 import re
 
 from mcpopus.plugin import BaseModel, Field, Plugin, PluginHost, SecretStr, ToolError, tool
-from pydantic import field_validator
+import httpx2
+from pydantic import field_validator, model_validator
 
 from .imapbackend import MAX_LIMIT, ImapBackend, MailError, Settings
 from .message import Summary, clean, parse_message
+from .notify import Notifier, Poller, check_fire_url
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -24,8 +26,12 @@ class Config(BaseModel):
     max_body_chars: int = Field(20_000, ge=1_000, le=200_000, description="Most characters of message text returned by read_message")
     max_fetch_bytes: int = Field(2_000_000, ge=10_000, le=25_000_000, description="Most bytes downloaded for one message; a larger message is read from its start")
     timeout_seconds: int = Field(20, ge=3, le=120, description="Seconds to wait for the mail server")
+    notify_url: str = Field("", max_length=300, description="Optional. The Fire URL of a Claude Code scheduled task with an API trigger (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire). When set, the plugin checks for new mail and tells that task which messages arrived (folder names and ids only). Leave empty for no notifications")
+    notify_token: SecretStr = Field(SecretStr(""), description="The API trigger's token for that scheduled task. Required when notify_url is set")
+    notify_folders: list[str] = Field([], description="Folders to watch for new mail, one per line. Empty means every visible folder (the readable_folders and blocked_folders settings still apply)")
+    poll_seconds: int = Field(300, ge=120, le=3600, description="Seconds between checks for new mail (only used when notify_url is set)")
 
-    @field_validator("imap_host", "username", "ca_certificate", mode="before")
+    @field_validator("imap_host", "username", "ca_certificate", "notify_url", mode="before")
     @classmethod
     def _trim(cls, v):  # pasted values often carry a stray space or newline
         return v.strip() if isinstance(v, str) else v
@@ -52,7 +58,30 @@ class Config(BaseModel):
             raise ValueError("must not be empty or contain control characters")
         return v
 
-    @field_validator("readable_folders", "blocked_folders", mode="before")
+    @field_validator("notify_url")
+    @classmethod
+    def _notify_url(cls, v: str) -> str:
+        return check_fire_url(v) if v else v
+
+    @field_validator("notify_token", mode="before")
+    @classmethod
+    def _notify_trim(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("notify_token")
+    @classmethod
+    def _notify_token(cls, v: SecretStr) -> SecretStr:
+        if _CTRL.search(v.get_secret_value()):
+            raise ValueError("must not contain control characters")
+        return v
+
+    @model_validator(mode="after")
+    def _token_needed(self):
+        if self.notify_url and not self.notify_token.get_secret_value():
+            raise ValueError("notify_token is required when notify_url is set")
+        return self
+
+    @field_validator("readable_folders", "blocked_folders", "notify_folders", mode="before")
     @classmethod
     def _lines(cls, v):
         if isinstance(v, list):
@@ -78,6 +107,12 @@ class Email(Plugin):
     def __init__(self, ctx) -> None:
         super().__init__(ctx)
         self.backend = ImapBackend(self._settings, ctx.logger)
+        self.http: httpx2.AsyncClient | None = None
+        self.poller: Poller | None = None
+        if ctx.config.notify_url:  # no network work here (rule 8): the first check runs from the polling task
+            self.http = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0), follow_redirects=False)
+            notifier = Notifier(lambda: self.ctx.config.notify_url, lambda: self.ctx.config.notify_token.get_secret_value(), self.http)
+            self.poller = Poller(self.backend, notifier, lambda: self.ctx.config.notify_folders, float(ctx.config.poll_seconds), ctx.logger)
 
     def _settings(self) -> Settings:
         c = self.ctx.config
@@ -100,6 +135,7 @@ class Email(Plugin):
         text = (f"Signed in to {c.imap_host} as {c.username}. The server listed {r['received']} folder entries; {r['usable']} can be opened, "
                 f"{r['visible']} are visible to this connector, {r['hidden']} are hidden by the readable_folders and blocked_folders settings, "
                 f"{r['unparsed']} were not understood. The connector can only read: nothing is marked read, moved or deleted.")
+        text += " " + self._notify_line()
         if r["visible"] == 0:
             if r["hidden"]:
                 text += " Nothing is visible because of the readable_folders or blocked_folders settings: check them (INBOX must be allowed)."
@@ -108,6 +144,13 @@ class Email(Plugin):
             else:
                 text += " The server reported no folders and INBOX could not be opened: check that the account has a mailbox and that this host and port are its IMAP service."
         return text
+
+    def _notify_line(self) -> str:
+        p = self.poller
+        if p is None:
+            return "New-mail notifications are off (the notify_url setting is empty)."
+        return (f"New-mail notifications are on: {p.watching} folders watched every {int(p.interval)} seconds, {p.ticks} checks so far, "
+                f"last result: {p.last_result}; {p.pending_count()} waiting to be sent. Nothing is remembered across a reload.")
 
     @tool(tier="read")
     async def list_folders(self) -> str:
@@ -153,4 +196,14 @@ class Email(Plugin):
 
 
 async def setup(host: PluginHost) -> None:
-    await host.add_plugin(Email(host.context))
+    plugin = Email(host.context)
+    await host.add_plugin(plugin)
+    if plugin.poller is not None:
+        plugin.poller.start()
+
+
+async def teardown(host: PluginHost) -> None:
+    plugin = next(iter(getattr(host, "_registered", [])), None)
+    if plugin is not None and plugin.poller is not None:
+        await plugin.poller.stop()
+        await plugin.http.aclose()

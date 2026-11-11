@@ -21,6 +21,8 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 _BAD = re.compile(r"[\x00-\x1f\x7f]")
 _HEADER_FIELDS = "FROM TO SUBJECT DATE"
 MAX_LIMIT = 50
+MAX_POLL_FOLDERS = 50  # folders looked at in one poll
+MAX_NEW_PER_FOLDER = 200  # newest ids kept per folder in one poll
 
 
 class MailError(Exception):
@@ -322,5 +324,55 @@ class ImapBackend:
                 if got == uid and e["lit"] is not None:
                     return box.name, validity, size, unread, e["lit"], size > len(e["lit"])
             raise MailError("No such message.")
+
+        return await self._run(work)
+
+    # ------------------------------------------------------------- polling
+    @staticmethod
+    def _number(conn, name: str) -> int:
+        try:
+            return int((conn.response(name)[1] or [b"0"])[-1])
+        except (ValueError, TypeError, IndexError):
+            return 0
+
+    async def poll(self, state: dict[str, tuple[int, int]], only: tuple[str, ...] = ()) -> tuple[dict[str, list[int]], dict[str, tuple[int, int]], int]:
+        """Look for messages that arrived since `state` (folder name -> (uidvalidity, highest uid seen)).
+
+        Returns (new uids per folder, the new state, folders looked at). A folder seen for the first time, or whose UIDVALIDITY changed,
+        only gets a baseline: nothing in it is reported. Only visible folders are opened (blocked ones never are); `only`, when given,
+        narrows that further. Read-only: EXAMINE and UID SEARCH.
+        """
+        wanted = {n.strip().casefold() for n in only if n.strip()}
+
+        def work(conn, s: Settings):
+            boxes = [b for b in self._list(conn, s) if not wanted or b.name.casefold() in wanted][:MAX_POLL_FOLDERS]
+            found: dict[str, list[int]] = {}
+            fresh: dict[str, tuple[int, int]] = {}
+            for box in boxes:
+                typ, _ = conn.select(quote(box.wire), readonly=True)  # EXAMINE
+                if typ != "OK":
+                    continue
+                validity, uidnext = self._number(conn, "UIDVALIDITY"), self._number(conn, "UIDNEXT")
+                before = state.get(box.name)
+                if before is None or before[0] != validity:
+                    if uidnext:
+                        top = uidnext - 1
+                    else:  # a server that does not announce UIDNEXT: ask for the highest uid instead
+                        typ, data = conn.uid("SEARCH", "ALL")
+                        top = max((int(x) for x in (data[0] or b"").split() if x.isdigit()), default=0) if typ == "OK" else 0
+                    fresh[box.name] = (validity, top)
+                    continue
+                last = before[1]
+                fresh[box.name] = (validity, last)
+                if uidnext and uidnext - 1 <= last:
+                    continue
+                typ, data = conn.uid("SEARCH", "UID", f"{last + 1}:*")
+                if typ != "OK":
+                    continue
+                uids = sorted({int(x) for x in (data[0] or b"").split() if x.isdigit() and int(x) > last})  # "n:*" always includes the last message
+                if uids:
+                    fresh[box.name] = (validity, uids[-1])
+                    found[box.name] = uids[-MAX_NEW_PER_FOLDER:]
+            return found, fresh, len(boxes)
 
         return await self._run(work)

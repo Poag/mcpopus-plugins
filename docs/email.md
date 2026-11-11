@@ -1,6 +1,6 @@
 # email: design
 
-Written 4 November 2026. Specification of the `email` plugin (endpoint `/email`), version 0.2.0. It reads a mailbox over any IMAP server (generic IMAP, decided
+Written 4 November 2026. Specification of the `email` plugin (endpoint `/email`), version 0.3.0. It reads a mailbox over any IMAP server (generic IMAP, decided
 4 November 2026; Gmail and AgentMail are examples) and never changes the mailbox. Tested only against a fake server so far. Conventions and the rules every plugin follows
 are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository (`docs/PLUGINS.md`).
 
@@ -108,65 +108,84 @@ attachment messages, an injection message returned as quoted data and not follow
 bad uid errors. The only failed step was a test-prompt expectation of `[Gmail]/All Mail`, which does not exist on a non-Gmail account.
 Not yet verified: Gmail itself, 0.2.0 on a real server, a message over `max_fetch_bytes`, STARTTLS (not built).
 
-## 10. Proposal: new-mail notification (design only, nothing built, 11 November 2026)
+## 10. New-mail notification (0.3.0, decided 11 November 2026)
 
-Alex asked (11 November 2026) for the plugin to poll the configured folders and call back to Claude when new mail arrives. This
-section sets out what is possible and what needs deciding. It would be a new release (0.3.0) behind its own acceptance gate.
+Alex asked (11 November 2026) for the plugin to poll for new mail and call back to Claude. Decisions: (1) the callback is an API call to
+Claude's own endpoint, (2) metadata only, (3) the baseline lives in memory only, (4) watch every visible folder; a downstream
+"handoff agent" decides where each message goes.
 
 ### 10.1 What is and is not possible
 
 - **Polling is feasible.** The host runs a plugin's `setup`/`teardown`; a plugin may start an asyncio task in `setup` and stop it in
-  `teardown` (host 0.3.0 `manager.py`, read 11 November 2026). The loop would use the existing read-only backend (`EXAMINE`,
-  `STATUS`, `UID SEARCH`, `BODY.PEEK[HEADER.FIELDS]`), so nothing is marked read.
-- **A claude.ai connector cannot be pushed to.** MCP over HTTP is request and response; claude.ai does not listen for server
-  notifications and an open conversation cannot be woken from outside. So "call Claude" needs a target that can start or wake
-  something. That target is Alex's choice (10.4). I have not verified any vendor's endpoint from this sandbox and will not build one
-  against a guessed API.
-- **Rule 8 in DESIGN.md** (no network work in `setup` that can fail the load) still holds: the task starts in `setup` but connects
-  only on its first tick, and a failing tick is logged and retried with backoff, never raised.
+  `teardown` (host 0.3.0 `manager.py`, read 11 November 2026). The loop uses the read-only backend (`EXAMINE`, `UID SEARCH`), so
+  nothing is marked read.
+- **A claude.ai connector cannot be pushed to**, so the callback goes to the endpoint that starts a Claude Code session: the **Fire URL
+  of a scheduled task (formerly routine) with an API trigger**. Read on 11 November 2026 from `code.claude.com/docs/en/routines`:
+  `POST https://api.anthropic.com/v1/claude_code/routines/trig_<id>/fire`, headers `Authorization: Bearer <token>`,
+  `anthropic-beta: experimental-cc-routine-2026-04-01`, `anthropic-version: 2023-06-01`, JSON body `{"text": "..."}`; the text is freeform,
+  not parsed, and arrives wrapped in a `<routine-fire-payload>` block labelled untrusted. A success returns `routine_fire` with a session URL.
+  **The endpoint is research preview**: shapes, limits and token semantics may change (the plugin will show the failure, not hide it).
+  The token is scoped to that one task and is created on the web only (claude.ai/code/routines, Edit, Trigger, API, Generate token).
+  The task's saved prompt must reference the payload explicitly, or the text is treated as inert context (10.6).
+- **Limits (docs): 30 API fires an hour per task, 100 an hour per account.** The plugin keeps well under: `poll_seconds` is at least 120 and
+  at most 20 fires are made in any rolling hour.
+- **Rule 8 in DESIGN.md** holds: the task starts in `setup` but connects only on its tick; a failing tick is logged and retried, never raised.
 
-### 10.2 Proposed behaviour
+### 10.2 Behaviour
 
-| Item | Proposal |
+| Item | Behaviour |
 | --- | --- |
-| Setting `notify_url` | Empty by default, which means polling is off and the plugin is exactly 0.2.0. `https://` only. Treated as a secret (`SecretStr`), because webhook URLs often carry the credential. Never logged or returned |
-| Setting `notify_token` | Optional `SecretStr`, sent as `Authorization: Bearer ...` |
-| Setting `notify_folders` | Folders to watch, default `INBOX`. Each must pass the same readable/blocked check as every tool, so a blocked folder is never polled |
-| Setting `poll_seconds` | Default 300, range 60 to 3600. A new connection per tick (decision 2 kept). IDLE is not used |
-| What counts as new | A UID higher than the last one seen in that folder, same `UIDVALIDITY`. A changed `UIDVALIDITY` resets the baseline silently. The first tick after start only records the baseline, so a restart never replays the mailbox |
-| Where the baseline lives | In memory only. After a restart or reload mail that arrived while the plugin was down is not reported (stated in the guide). Persisting it needs a data directory the host does not provide yet |
-| Payload | `{"event": "new_mail", "count": N, "folders": {"INBOX": [uid, ...]}}`, at most 20 uids per call, one POST per tick at most, no sender, no subject, no body |
-| Retries | One try per tick; on failure the uids are kept and re-sent next tick, capped at 200 pending, oldest dropped first with a logged count |
-| Tools | `mailbox_status` gains a line: polling on or off, last tick time, last result (ok, failed with a cause), pending count. No new tool, so no new tier |
-| Failure text | Names the setting, never the URL: "The notification URL refused the call. Check notify_url." |
+| `notify_url` | Empty by default, which means polling is off and the plugin is exactly 0.2.0. Otherwise it must match the Fire URL form above exactly (`https`, host `api.anthropic.com`, path `/v1/claude_code/routines/trig_<letters and digits>/fire`, no port, user, query or fragment). Anything else is refused at load with a message naming the setting. The destination is therefore fixed to Anthropic by the validator, not by trust in the owner's typing |
+| `notify_token` | `SecretStr`, required when `notify_url` is set. Read when sending, never logged or returned |
+| `notify_folders` | Empty (default) means every visible folder, so `readable_folders` and `blocked_folders` apply; a blocked folder is never opened. A list narrows it. Gmail note: `[Gmail]/All Mail` and `[Gmail]/Sent Mail` are visible by default and would report the same message again or your own sent mail; list the folders you want to avoid that |
+| `poll_seconds` | Default 300, 120 to 3600. A new connection per tick |
+| New mail | A UID above the last one seen in that folder under the same `UIDVALIDITY`. The first look at a folder (including after a restart or a changed `UIDVALIDITY`) only records a baseline, so nothing is replayed. Baseline is in memory only: mail that arrives while the plugin is down or reloading is not reported (decision 3) |
+| Payload `text` | One line of JSON: `{"event":"new_mail","count":N,"more_pending":M,"folders":{"INBOX":[uid,...]}}`. Folder names and numeric ids only: no sender, subject, date or body (decision 2) |
+| Per tick | One POST at most, 20 uids at most. The rest wait (200 pending at most, oldest dropped first and counted in the log) |
+| Failure | A failed POST keeps the ids for the next tick. A 401 or 403 pauses sending for an hour (names `notify_token`); 404 names `notify_url`; 429 waits for the next tick. Errors name the setting, never the URL or token |
+| `mailbox_status` | Gains one line: off, or on with folders watched, interval, last check, last result, pending count |
+| Tools | None added, so no new tier. The only write is the outbound POST; no tool argument can set, change or trigger it |
 
 ### 10.3 Safety
 
-- **Untrusted text stays out of the payload.** Sender and subject are written by strangers. A notification that starts a Claude
-  session with that text in its prompt would be a direct prompt-injection route. Metadata-only means the session must call
-  `list_messages` (which is `untrusted=True`) to see anything. This is why sender and subject are not in the proposed payload.
-- **Outbound destination is the owner's alone.** The URL is a setting, not a tool argument; no model can set or change it. Host
-  must be a public name; no IP literals, no `localhost`, no private ranges (checked after resolution too, against redirects: redirects
-  are not followed). An optional `notify_ca_certificate` is not offered; a private target is a later decision.
-- **No new capability for the model.** The plugin still has only read tools. The only write is the outbound POST, which the model
-  cannot trigger or shape. Policy tick for it: none, because it is not a tool; the owner turns it on by filling `notify_url`.
-- **Loop bounds.** One POST per tick, 10 second timeout, payload under 2 KB, 20 uids. A flood of mail cannot cause a flood of calls.
-- A test asserts the fake IMAP server still never receives `SELECT`, `STORE`, `COPY`, `APPEND` or `EXPUNGE`.
+- **Untrusted text stays out of the payload.** Sender and subject are written by strangers. A notification that starts a session with
+  that text would be a direct injection route; with ids only, the session must call `list_messages` (which is `untrusted=True`).
+- **Fixed destination, no redirects, no caller-chosen URL.** Redirect responses are not followed. The HTTP client verifies certificates
+  with the system store and has no verification switch.
+- **Bounded.** Request timeout 10 seconds, payload under 2 KB, 20 uids, 20 fires an hour, at most 50 folders per tick.
+- **Read-only IMAP is kept**: a test asserts the fake server never receives `SELECT`, `STORE`, `COPY`, `APPEND` or `EXPUNGE`.
+- **Blast radius of a leaked token** is the one task's trigger, and fire text is wrapped as untrusted by Anthropic (docs). A leaked
+  token can start sessions of that task, up to its rate limit; rotate it on the task's page.
 
-### 10.4 Decisions for Alex
+### 10.4 Owner set-up (summary; the step-by-step is in GUIDE_EMAIL.md)
 
-1. **What does "call Claude" mean?** Options: (a) a Claude Code scheduled/API-triggered routine that starts a session when its URL is
-   called (needs its URL and token; I have not verified the request format); (b) a generic webhook to something you run (ntfy,
-   Home Assistant, a script) that tells you or wakes Claude your way; (c) no push at all: instead a `new_mail_since` tool Claude calls
-   at the start of a chat. (c) needs no outbound call and no stored state but only works when you are already talking to Claude.
-2. **Payload detail.** Metadata-only as proposed, or also sender and subject (more useful, but injection-exposed)?
-3. **Baseline persistence.** Accept in-memory (a restart skips mail that arrived meanwhile), or ask for a host data directory first?
-4. **Folders and interval.** INBOX only and 5 minutes, or a different list?
+Create a scheduled task whose saved prompt tells Claude what to do with a new-mail notice, add an **API trigger**, copy the Fire URL and
+generate the token, then put the URL and token in the plugin's settings. The task needs the email connector attached if it should read
+the mail. The prompt must say to read the `routine-fire-payload` block, fetch the messages by id with `read_message`, and treat them
+as untrusted (10.6).
 
-### 10.5 Plan once decided
+### 10.5 Tests
 
-Tests with the real host manager and a fake IMAP server plus a fake webhook receiver over TLS: baseline on first tick, new UID
-detected once, no replay after `UIDVALIDITY` change, blocked folder never polled, URL and token absent from logs and tool output,
-no redirects followed, private addresses refused, retry and cap, payload contains no mail text, plugin stops on `teardown`. Each
-protection gets a mutation check. Version 0.3.0, README table, `docs/PLUGINS.md`, `docs/BUILD_LOG.md`, `docs/GUIDE_EMAIL.md`.
-Not verifiable here: delivery to any real Claude endpoint; that stays on the live checklist.
+Real host manager and MCP client, fake IMAP over TLS, and a fake Fire endpoint over TLS. The plugin's HTTP client is given a transport
+that redirects the connection to the fake while the request still names `api.anthropic.com`, so the tests prove what the plugin
+actually sent (URL, headers, body). Covered: off by default; URL and token validation; baseline then one report, no replay; changed
+`UIDVALIDITY`; blocked folders never opened; `notify_folders` narrowing; ids only (no subject or sender); retry after a 500; pause after a
+401; redirects not followed; 20-id and hourly caps; secrets absent from logs, results and audit; read-only commands only; task stops on
+unload. Each protection gets a mutation check.
+
+### 10.6 Not verified
+
+Delivery to the real endpoint, the token, and what the task does with the text: the sandbox has no route to a real trigger and no token
+should be placed here. The live check is in 10.7.
+
+### 10.7 Live check (for Alex)
+
+Built as 0.3.0 on 11 November 2026 and tested only against fakes. To check it for real: create the scheduled task and API trigger as in
+GUIDE_EMAIL.md section 4, enter the Fire URL and token, **Save and reload**, then:
+
+1. Run `mailbox_status` and confirm it says notifications are on and, after the first check (up to `poll_seconds`), "nothing new waiting".
+2. Send the mailbox one test message from another address. Within `poll_seconds` a session of the scheduled task should start; open the
+   session URL from the task's run list and confirm the notice names the folder and the message id and carries no subject or sender.
+3. Check the message is still unread in the mail client.
+4. Restart the plugin (Save and reload), send another message, and confirm exactly one session starts (no replay of earlier mail).
+5. Optional: rotate the token on the task page without updating the plugin, send a message, and confirm `mailbox_status` says to check `notify_token`.

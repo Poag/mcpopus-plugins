@@ -30,6 +30,32 @@ Tests: the doorbell scenario against the fake (saved disabled, no `to`, nothing 
 
 Anything on the real Home Assistant: the owner's actual allow pattern; that the real doorbell event entity behaves as the Core source says; that the saved chime fires. The helper tool is design only.
 
+## 2026-11-11: email 0.3.0, new-mail notification (off by default)
+
+Alex asked for the plugin to poll and call back to Claude. His decisions: an API call to Anthropic's endpoint, ids only, memory-only baseline, watch every
+visible folder. Design is `docs/email.md` section 10.
+
+### Verified
+
+- The Fire endpoint, read from `code.claude.com/docs/en/routines` on 11 November 2026: `POST https://api.anthropic.com/v1/claude_code/routines/trig_.../fire`, bearer
+  token, headers `anthropic-beta: experimental-cc-routine-2026-04-01` and `anthropic-version: 2023-06-01`, JSON `{"text": ...}`, text wrapped as untrusted by
+  Anthropic, limits 30 fires an hour per task and 100 per account, research preview. The linked API reference page was not read.
+- Host 0.3.0 `manager.py`: a plugin may run a task between `setup` and `teardown`.
+
+### Changed
+
+- New `notify.py` (poller, notifier, URL check). `imapbackend.poll`: `EXAMINE` and `UID SEARCH UID n:*` only. Three new settings plus `notify_folders`; no new tool.
+- The URL is pinned by a validator to the exact Fire URL form on `api.anthropic.com`; redirects are not followed; payload is folder names and numeric ids.
+- 24 new tests (fake IMAP over TLS, fake Fire endpoint over TLS; the plugin's client is redirected to the fake while the request still names Anthropic).
+  17 mutation checks, each made a test fail (baseline, uid filter, blocked-folder rule, folder narrowing, UIDVALIDITY reset, redirects, URL pin, log filter,
+  auth pause, batch cap, hourly cap, pending cap, token header, payload text, token required, interval floor, stop on unload). Two first survived; tests were added.
+- The tests found a leak before release: `httpx2` logs each request URL at INFO, which would put the trigger id in the host log. A log filter now drops those records.
+
+### Unverified
+
+Delivery to the real endpoint, a real token, what the scheduled task does with the text, behaviour of real servers that omit `UIDNEXT` (tested on a fake only),
+and whether Anthropic's API reference differs from the page read. Live check: `docs/email.md` section 10.7.
+
 ## 2026-11-10: homeassistant hand-over, corrected live checklist (no plugin change, still 0.4.3)
 
 Took over the plugin. CI green on `main` (bb0f98a, run 33). 71 homeassistant and requirements tests pass locally against host 0.3.0. No behaviour change, so no version bump.

@@ -9,7 +9,7 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 | Plugin | Version | Tools (tier) | Design | Set-up |
 | --- | --- | --- | --- | --- |
 | `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata, list_bases, read_base, query_base (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md), [DESIGN-bases.md](DESIGN-bases.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
-| `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
+| `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read); optional new-mail notice to a Claude Code scheduled task (no tool) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled, save_automation (write); delete_automation (admin); list_automations, get_automation_definition (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
 | `swarmui` | see `plugins/swarmui/plugin.toml` | status, models, LoRAs, describe, parameters, images, job status (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | section 12 of the design |
 
