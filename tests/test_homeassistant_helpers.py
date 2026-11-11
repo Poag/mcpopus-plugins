@@ -1,4 +1,4 @@
-"""create_helper: one input_boolean, named with the owner's prefix, put in the owner's helper category. Design section 9d."""
+"""create_helper: one input_boolean, named with the owner's prefix, put in the owner's Claude category (claude_prefix and claude_category). Design sections 5b and 9d."""
 
 import logging
 
@@ -13,7 +13,7 @@ ON = Policy(read_only=False, enable_tools=["create_helper"])
 
 
 def hcfg(ha, **kw):
-    return values(ha, **{"helper_category": "Claude", **kw})
+    return values(ha, **{"claude_category": "Claude", **kw})
 
 
 async def create(c, helper_id="doorbell_chime", **kw):
@@ -37,9 +37,9 @@ async def test_creates_the_prefixed_helper_in_the_category_and_changes_nothing_e
     before = {k: dict(v) for k, v in ha.states.items()}
     async with running_plugin(tmp_path, HOME, hcfg(ha, write_entity_allowlist=["input_boolean.claude_*"]), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c, "Doorbell_Chime")  # lower-cased
-        assert not err and "Created the helper input_boolean.claude_doorbell_chime (off to start)." in t and "helper category Claude" in t and "matches write_entity_allowlist" in t, t
+        assert not err and "Created the helper input_boolean.claude_doorbell_chime (off to start)." in t and "It is in the category Claude" in t and "matches write_entity_allowlist" in t, t
         _, status = await call(c, "status")
-        assert "input_boolean helpers named input_boolean.claude_<name>, in the helper category Claude" in status
+        assert "input_boolean helpers named input_boolean.claude_<name>, in the category Claude" in status
         err, t = await call(c, "get_entity", {"entity_id": "input_boolean.claude_doorbell_chime"})
         assert not err and "state: off" in t  # the caches were dropped, so the new helper is visible at once
     assert created(ha) == [("claude_doorbell_chime", False)]
@@ -57,7 +57,7 @@ async def test_initial_on_and_the_write_list_note(ha, tmp_path):
 
 
 async def test_a_custom_prefix_and_case_insensitive_category(ha, tmp_path):
-    async with running_plugin(tmp_path, HOME, hcfg(ha, helper_id_prefix="bot_", helper_category="  claude  "), SECRETS, policy=ON) as (c, _, _):
+    async with running_plugin(tmp_path, HOME, hcfg(ha, claude_prefix="bot_", claude_category="  claude  "), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
         assert not err and "input_boolean.bot_doorbell_chime" in t
     assert created(ha) == [("bot_doorbell_chime", False)]
@@ -74,9 +74,9 @@ async def test_bad_ids_are_refused_before_anything_is_sent(ha, tmp_path, bad):
 async def test_the_category_setting_is_required_and_the_category_must_exist(ha, tmp_path):
     async with running_plugin(tmp_path / "a", HOME, values(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
-        assert err and "not set up" in t and "has not named a helper category" in t and "Claude" not in t
+        assert err and "not set up" in t and "has not named a category" in t and "Claude" not in t
         assert ha.ws_attempts == 0  # refused before any connection
-    async with running_plugin(tmp_path / "b", HOME, hcfg(ha, helper_category="No such category"), SECRETS, policy=ON) as (c, _, _):
+    async with running_plugin(tmp_path / "b", HOME, hcfg(ha, claude_category="No such category"), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
         assert err and "No helper category" in t and "nothing was created" in t and "Other" not in t  # other category names are not listed
     ha.categories_supported = False
@@ -123,7 +123,7 @@ async def test_a_slow_registry_is_waited_for_and_a_missing_entry_is_reported_pla
     ha.helper_registry_misses = 2
     async with running_plugin(tmp_path / "a", HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
-        assert not err and "helper category Claude" in t
+        assert not err and "It is in the category Claude" in t
     ha.helper_registry_misses = 99
     async with running_plugin(tmp_path / "b", HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c, "second_flag")
@@ -134,7 +134,7 @@ async def test_a_refused_category_assignment_and_a_different_id_are_reported_not
     ha.helper_update_fails = True
     async with running_plugin(tmp_path / "a", HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c)
-        assert not err and "would not put it in the helper category" in t
+        assert not err and "would not put it in the category Claude" in t
     ha.helper_update_fails, ha.helper_force_suffix = False, True
     async with running_plugin(tmp_path / "b", HOME, hcfg(ha), SECRETS, policy=ON) as (c, _, _):
         err, t = await create(c, "clash_flag")
@@ -161,8 +161,8 @@ async def test_the_write_rate_limit_is_shared_and_the_token_never_appears(ha, tm
 async def test_config_rules(ha, tmp_path):
     from mcpopus.manager import PluginLoadError
 
-    for field, bad in (("helper_id_prefix", "Bad Prefix"), ("helper_id_prefix", ""), ("helper_id_prefix", "x" * 21), ("helper_id_prefix", "a__b"), ("helper_id_prefix", "1abc"),
-                       ("helper_category", "x" * 81), ("helper_category", "a\x07b")):
+    for field, bad in (("claude_prefix", "Bad Prefix"), ("claude_prefix", ""), ("claude_prefix", "x" * 21), ("claude_prefix", "a__b"), ("claude_prefix", "1abc"),
+                       ("claude_category", "x" * 81), ("claude_category", "a\x07b")):
         with pytest.raises(PluginLoadError) as e:
             async with running_plugin(tmp_path / (field + str(len(bad)) + bad[:1].encode().hex()), HOME, values(ha, **{field: bad}), SECRETS):
                 pass

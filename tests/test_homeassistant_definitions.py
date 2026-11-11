@@ -97,7 +97,7 @@ async def test_only_prefixed_ids_can_be_written_or_deleted(ha, tmp_path):
             err, t = await call(c, "delete_automation", {"automation_id": bad})
             assert err and "must start with claude_" in t, bad
         assert "No such automation." in (await call(c, "delete_automation", {"automation_id": "claude_nope"}))[1]
-    async with running_plugin(tmp_path / "b", HOME, dcfg(ha, automation_id_prefix="bot_"), SECRETS, policy=ALL) as (c, _, _):
+    async with running_plugin(tmp_path / "b", HOME, dcfg(ha, claude_prefix="bot_"), SECRETS, policy=ALL) as (c, _, _):
         assert (await save(c))[0]  # the configured prefix applies
         assert not (await save(c, automation_id="bot_ok"))[0]
     assert [m for m, _ in ha.config_calls if m != "GET"] == ["POST"] and ha.saved[0]["id"] == "bot_ok"
@@ -211,8 +211,8 @@ async def test_secrets_never_appear_and_rate_limit_is_shared(ha, tmp_path, caplo
 async def test_config_rules(ha, tmp_path):
     from mcpopus.manager import PluginLoadError
 
-    for extra, secrets, field, leaked in (({"automation_id_prefix": "Bad Prefix"}, SECRETS, "automation_id_prefix", "Bad Prefix"), ({"automation_id_prefix": ""}, SECRETS, "automation_id_prefix", None),
-                                          ({"automation_id_prefix": "x" * 21}, SECRETS, "automation_id_prefix", None)):
+    for extra, secrets, field, leaked in (({"claude_prefix": "Bad Prefix"}, SECRETS, "claude_prefix", "Bad Prefix"), ({"claude_prefix": ""}, SECRETS, "claude_prefix", None),
+                                          ({"claude_prefix": "x" * 21}, SECRETS, "claude_prefix", None)):
         with pytest.raises(PluginLoadError) as e:
             async with running_plugin(tmp_path / (field + str(len(str(extra)))), HOME, values(ha, **extra), secrets):
                 pass

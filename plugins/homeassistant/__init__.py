@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx2
 from mcpopus.plugin import BaseModel, Field, Plugin, PluginHost, SecretStr, ToolError, tool
-from pydantic import field_validator, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from . import text as tx
 from .automations import ID_BODY, Context, DefinitionError, build_config, definition_problem
@@ -27,6 +27,7 @@ DEFAULT_REDACTED = ["access_token", "entity_picture", "latitude", "longitude", "
 HISTORY_POINTS = 200
 LOGBOOK_ENTRIES = 100
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
+LEGACY_SETTINGS = ("automation_id_prefix", "helper_id_prefix", "automation_categories", "helper_category")  # replaced by claude_prefix and claude_category in 0.6.0
 
 
 def _items(v):
@@ -40,6 +41,8 @@ def _items(v):
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(extra="allow")  # old setting names stay readable so that status can say they are no longer used
+
     base_url: str = Field(description="Home Assistant address, for example http://homeassistant.local:8123 or https://ha.example.com (no path, no credentials)")
     token: SecretStr = Field(description="A long-lived access token. Create it on a dedicated Home Assistant user's profile page, and revoke it there to cut access. The automation definition tools only work if that user is an administrator; without them a non-administrator is safer")
     verify_tls: bool = Field(True, description="Check the server certificate for https. Turn off only on a trusted network, and prefer ca_certificate")
@@ -49,10 +52,8 @@ class Config(BaseModel):
     domain_denylist: list[str] = Field(DEFAULT_DENIED_DOMAINS, description="Whole domains that are never visible (one per line). Replacing this list removes the defaults. Suggested defaults, for you to change")
     allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
     write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.* or input_boolean.doorbell_chime). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
-    automation_categories: list[str] = Field([], description="Automations in these Home Assistant categories (names, one per line) may be triggered, enabled and disabled by the automation tools. Empty means none, except automations matching write_entity_allowlist")
-    automation_id_prefix: str = Field("claude_", description="Automations this connector creates, edits or deletes must have a config id starting with this. Human-written automations never do, so they cannot be changed or deleted")
-    helper_id_prefix: str = Field("claude_", description="create_helper names new helpers with this prefix (1 to 20 lower-case letters, digits and underscores, starting with a letter). The entity is input_boolean.<prefix><helper_id>")
-    helper_category: str = Field("", description="Name of an existing Home Assistant helper category that create_helper puts new helpers in (create it first under Settings, Devices and services, Helpers). Empty means create_helper refuses")
+    claude_prefix: str = Field("claude_", description="The one prefix for everything Claude creates: automation config ids it may create, change or delete must start with it, and helpers it creates are named with it (1 to 20 lower-case letters, digits and single underscores, starting with a letter). Human-written automations never match, so they cannot be changed or deleted")
+    claude_category: str = Field("", description="The one Home Assistant category Claude works in (a name, case-insensitive). Automations in it can be triggered, enabled and disabled, and helpers Claude creates are put in it. Create a category with this name in each place you use it (Settings, Automations, Categories; Settings, Devices and services, Helpers, Categories). Empty means no automation can be controlled by category and no helper can be created")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -79,25 +80,42 @@ class Config(BaseModel):
             raise ValueError("must be the access token only: no spaces, line breaks or empty value (copy the whole key)")
         return v
 
-    @field_validator("automation_id_prefix", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_old_names(cls, data):
+        """0.6.0 replaced four settings by claude_prefix and claude_category. An old stored value fills a new setting that is empty, if the old ones agree;
+        if they disagree the load is refused (naming the new setting), never guessed."""
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not str(d.get("claude_prefix") or "").strip():
+            old = {str(d[k]).strip() for k in ("automation_id_prefix", "helper_id_prefix") if isinstance(d.get(k), str) and d[k].strip()}
+            if len(old) > 1:
+                raise ValueError("claude_prefix: the old automation_id_prefix and helper_id_prefix settings are different; set claude_prefix to the one prefix to use")
+            if old:
+                d["claude_prefix"] = old.pop()
+        if not str(d.get("claude_category") or "").strip():
+            found: dict[str, str] = {}
+            for name in [*_items(d.get("automation_categories") if isinstance(d.get("automation_categories"), list) else []), d.get("helper_category")]:
+                if isinstance(name, str) and name.strip():
+                    found.setdefault(name.strip().casefold(), name.strip())
+            if len(found) > 1:
+                raise ValueError("claude_category: the old automation_categories and helper_category settings name different categories; set claude_category to the one category to use")
+            if found:
+                d["claude_category"] = next(iter(found.values()))
+        return d
+
+    @field_validator("claude_prefix", mode="before")
     @classmethod
     def _prefix(cls, v):
-        v = v.strip() if isinstance(v, str) else v
-        if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,19}", v):
-            raise ValueError("must be 1 to 20 characters: lower-case letters, digits and underscores, starting with a letter, for example claude_")
-        return v
-
-    @field_validator("helper_id_prefix", mode="before")
-    @classmethod
-    def _helper_prefix(cls, v):
         v = v.strip() if isinstance(v, str) else v
         if not isinstance(v, str) or not re.fullmatch(r"[a-z][a-z0-9]*(_[a-z0-9]+)*_?", v) or len(v) > 20:
             raise ValueError("must be 1 to 20 characters: lower-case letters, digits and single underscores, starting with a letter, for example claude_")
         return v
 
-    @field_validator("helper_category", mode="before")
+    @field_validator("claude_category", mode="before")
     @classmethod
-    def _helper_category(cls, v):
+    def _category(cls, v):
         v = v.strip() if isinstance(v, str) else v
         if isinstance(v, str) and (len(v) > 80 or _CTRL.search(v)):
             raise ValueError("must be a category name of up to 80 characters with no control characters")
@@ -141,16 +159,6 @@ class Config(BaseModel):
             raise ValueError("entries must look like light.turn_on (one domain.service each, no wildcards; separate entries with new lines or commas)")
         return out
 
-    @field_validator("automation_categories", mode="before")
-    @classmethod
-    def _categories(cls, v):
-        if not isinstance(v, list):
-            return v
-        out = [x.strip().casefold() for x in v if isinstance(x, str) and x.strip()]
-        if len(out) > 20 or any(len(c) > 80 or _CTRL.search(c) for c in out):
-            raise ValueError("at most 20 category names of up to 80 characters, no control characters")
-        return out
-
     @field_validator("redact_attributes", mode="before")
     @classmethod
     def _redact(cls, v):
@@ -163,7 +171,7 @@ class Config(BaseModel):
         if any(domain_of(s) in denied for s in self.allowed_services):
             raise ValueError("allowed_services contains a service in a domain listed in domain_denylist; remove one or the other")
         if any(domain_of(sv) == "automation" for sv in self.allowed_services):
-            raise ValueError("allowed_services may not contain automation services; use automation_categories with the automation tools instead")
+            raise ValueError("allowed_services may not contain automation services; use claude_category with the automation tools instead")
         if any(p.split(".", 1)[0] in denied for p in self.write_entity_allowlist):
             raise ValueError("write_entity_allowlist contains a pattern in a domain listed in domain_denylist; remove one or the other")
         return self
@@ -271,13 +279,17 @@ class HomeAssistantPlugin(Plugin):
             f"(settings allowed_services and write_entity_allowlist; the write list is separate from the allow list above and hides nothing); {changeable} visible entity(ies) match those patterns"
             + (" (none: nothing can be changed)." if not cfg.write_entity_allowlist or not cfg.allowed_services else ".")
             + " It is only available if the owner ticked it under Policy.",
-            f"Automation definition tools need the token's user to be an administrator; ids Claude may create or change start with {cfg.automation_id_prefix}.",
-            "Automations Claude may trigger or switch: " + (f"categories {', '.join(cfg.automation_categories)}" if cfg.automation_categories else "no category set")
+            f"Automation definition tools need the token's user to be an administrator; ids Claude may create or change start with {cfg.claude_prefix}.",
+            "Automations Claude may trigger or switch: " + (f"category {tx.clean(cfg.claude_category, 80)}" if cfg.claude_category else "no category set (claude_category is empty)")
             + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
+        legacy = sorted(k for k in (cfg.model_extra or {}) if k in LEGACY_SETTINGS)
+        if legacy:
+            lines.append(f"Old settings are still stored and are no longer used: {', '.join(legacy)}. They were replaced by claude_prefix and claude_category (design section 5b); where they agreed, their values were carried over. "
+                         "Open the plugin page, check claude_prefix and claude_category, and Save: that removes the old ones.")
         lines.append("Helpers Claude may create: "
-                     + (f"input_boolean helpers named input_boolean.{cfg.helper_id_prefix}<name>, in the helper category {tx.clean(cfg.helper_category, 80)}. Only if the owner ticked create_helper under Policy, and the token's user is an administrator."
-                        if cfg.helper_category else "none (the helper_category setting is empty)."))
+                     + (f"input_boolean helpers named input_boolean.{cfg.claude_prefix}<name>, in the category {tx.clean(cfg.claude_category, 80)}. Only if the owner ticked create_helper under Policy, and the token's user is an administrator."
+                        if cfg.claude_category else "none (the claude_category setting is empty)."))
         if cfg.entity_allowlist:
             lines.append("Allow list note: entity_allowlist is the READ filter. Because it is set, every entity that does not match it is hidden, including the ones an automation would watch; "
                          "to let Claude change an entity use write_entity_allowlist instead, and leave entity_allowlist empty unless you want to hide the rest of the home."
@@ -518,7 +530,7 @@ class HomeAssistantPlugin(Plugin):
 
     async def _automation_may_run(self, eid: str, registry) -> bool:
         """An automation may be controlled when it is in an allowed category, or matches the write list."""
-        cats = frozenset(self.ctx.config.automation_categories)
+        cats = frozenset([self.ctx.config.claude_category.casefold()] if self.ctx.config.claude_category else [])
         if writable(self.policy, self.write_allow, eid):
             return True
         return bool(registry is not None and cats and registry.automation_category(eid).casefold() in cats)
@@ -608,7 +620,7 @@ class HomeAssistantPlugin(Plugin):
     # ------------------------------------------------- automation definitions
     def _config_id(self, automation_id: str) -> str:
         cid = str(automation_id or "").strip().lower()
-        prefix = self.ctx.config.automation_id_prefix
+        prefix = self.ctx.config.claude_prefix
         if not re.fullmatch(re.escape(prefix) + ID_BODY, cid):
             raise ToolError(f"automation_id must start with {prefix} followed by 1 to 40 lower-case letters, digits or underscores (for example {prefix}porch_evening). "
                             "Only automations whose id starts that way can be created, changed or deleted by this connector.")
@@ -701,18 +713,18 @@ class HomeAssistantPlugin(Plugin):
     async def create_helper(self, helper_id: str, initial: bool = False) -> str:
         """Create one on/off helper (an input_boolean) named with the owner's prefix and put it in the owner's helper category. helper_id is the name after the prefix, for example doorbell_chime (lower-case letters, digits and single underscores, up to 40). initial is whether it starts on (default off). It does not become something Claude may change until the owner allows it. Needs the token's user to be an administrator."""
         cfg = self.ctx.config
-        if not cfg.helper_category:
-            raise ToolError("Creating helpers is not set up: the owner has not named a helper category in the helper_category setting.")
+        if not cfg.claude_category:
+            raise ToolError("Creating helpers is not set up: the owner has not named a category in the claude_category setting.")
         if not isinstance(initial, bool):
             raise ToolError("initial must be true or false.")
         hid = str(helper_id or "").strip().lower()
         if not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", hid) or len(hid) > 40:
             raise ToolError(f"helper_id is 1 to 40 lower-case letters, digits and single underscores, with none at the start or end (for example doorbell_chime). "
-                            f"The helper will be input_boolean.{cfg.helper_id_prefix}<helper_id>.")
-        name = cfg.helper_id_prefix + hid
+                            f"The helper will be input_boolean.{cfg.claude_prefix}<helper_id>.")
+        name = cfg.claude_prefix + hid
         eid = f"input_boolean.{name}"
         if not re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)*", name) or not ENTITY_RE.fullmatch(eid):
-            raise ToolError("The helper_id_prefix setting and that helper_id do not make a valid name.")
+            raise ToolError("The claude_prefix setting and that helper_id do not make a valid name.")
         rule = self.policy.hidden_by(eid)
         if rule:  # the answer depends on the new id and the settings only; a helper Claude could not see would be pointless
             raise ToolError(f"{eid} would be hidden by the {'domain_denylist' if rule == 'domain' else 'entity_denylist' if rule == 'deny' else 'entity_allowlist'} setting, "
@@ -721,7 +733,7 @@ class HomeAssistantPlugin(Plugin):
             raise ToolError("A helper or entity with that id already exists, or cannot be created. Choose a different helper_id.")
         self._take_write_slot()
         try:
-            made = await self._guard(self.ha.create_helper(name, initial, cfg.helper_category))
+            made = await self._guard(self.ha.create_helper(name, initial, cfg.claude_category))
         except HelperRefused as e:
             raise ToolError(str(e)) from None
         self.ctx.logger.info("helper created: %s (category %s)", made["entity_id"], "assigned" if made["categorised"] else "NOT assigned")
@@ -733,16 +745,16 @@ class HomeAssistantPlugin(Plugin):
         if shown != eid:
             lines.append(f"Note: Home Assistant named it {shown}, not {eid} as asked (a name clash). Check it in Home Assistant.")
         if made["categorised"]:
-            lines.append(f"It is in the helper category {tx.clean(cfg.helper_category, 80)}.")
+            lines.append(f"It is in the category {tx.clean(cfg.claude_category, 80)}.")
         elif made["registered"]:
-            lines.append(f"It was created but Home Assistant would not put it in the helper category {tx.clean(cfg.helper_category, 80)}. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
+            lines.append(f"It was created but Home Assistant would not put it in the category {tx.clean(cfg.claude_category, 80)}. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
         else:
             lines.append("It was created but had not appeared in Home Assistant's entity registry yet, so it is not in a category. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
         if writable(self.policy, self.write_allow, shown):
             lines.append("It matches write_entity_allowlist, so an allowed service can change it.")
         else:
             lines.append("It does not match write_entity_allowlist, so Claude cannot change it or use it in an automation action yet. To allow that, the owner adds "
-                         f"{shown} (or input_boolean.{cfg.helper_id_prefix}*) to write_entity_allowlist and the services to allowed_services.")
+                         f"{shown} (or input_boolean.{cfg.claude_prefix}*) to write_entity_allowlist and the services to allowed_services.")
         return "\n".join(lines)
 
     def _brief(self, s: dict) -> str:

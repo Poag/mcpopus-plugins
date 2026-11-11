@@ -3,6 +3,26 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.6.0 (one prefix and one category for everything Claude works in)
+
+Alex asked to unify the categories Claude works in into one field and one prefix, reused in all areas. Design section 5b; 0.6.0 is a settings change, no new tool.
+
+### Changed
+
+- `claude_prefix` (default `claude_`) replaces `automation_id_prefix` and `helper_id_prefix`: the prefix of automation config ids Claude may create, change or delete, and of the helpers `create_helper` makes. One rule, the stricter helper rule (single underscores).
+- `claude_category` (default empty) replaces `automation_categories` (a list) and `helper_category`: one category name, looked up in the automation scope for `list_automations`, `trigger_automation` and `set_automation_enabled`, and in the helpers scope for `create_helper`. The owner creates a category with that name in each scope they use; the plugin never creates categories. A list of several categories is no longer supported.
+- Migration so an update changes nothing silently: the host ignores stored settings a plugin no longer defines, so Alex's stored `automation_categories = claude` would have stopped applying without a word. A pre-validator copies an old value into an empty new setting when the old ones agree (case-insensitively); if they disagree the load is refused and the message names `claude_prefix` or `claude_category` (no values). The new value always wins. The model keeps the old keys (`extra="allow"`), so `status` lists them by name and asks the owner to open the plugin page and Save, which drops them.
+- Not done on purpose: `save_automation` does not put the automation in the category, because that would make every Claude-written automation immediately triggerable and enable-able and remove the "starts disabled" safeguard. A separate decision for the owner.
+- Messages and docs now say `claude_prefix` and `claude_category`; design settings table, 9b, 9c, 9d, checklists 10c, 10d, 10f, 10g updated. Version 0.6.0.
+
+### Verified by tests
+
+9 new tests in `tests/test_homeassistant_unified.py` (real host manager, fake Home Assistant): one category and one prefix drive automations and helpers alike (one running plugin, custom prefix and category); an empty category disables category control and helper creation; old stored settings keep working and `status` names them without values; a new value wins over an old one; disagreeing old settings refuse to load and name the new setting without values; agreeing old settings in different case are accepted; the settings form has only the two new fields. The settings in the older tests were renamed. Eleven mutation checks each made a test fail: helpers or automations ignoring the shared prefix; the automation fence or the helper category ignoring the shared category; the old prefix or category not migrated; either disagreement not refused; the new value not winning; the warning removed; the old keys dropped.
+
+### Not verified
+
+On the real host: that Alex's stored settings load and migrate (his stored `automation_categories` is the only old value I know of) and that the form shows `claude_category` as a text field. Read in the host code (0.3.0, not run live): the admin form is built from the model's declared fields only (`forms.describe`/`parse`), and `ConfigStore.save` replaces the stored values wholesale, so the first Save on the plugin page drops the old keys; a refused Save shows "Not saved: ... still running with its previous settings". Also seen once: `tests/test_email_notify.py::test_only_two_hundred_ids_wait_and_the_oldest_go_first` (another session's) failed in a full run and passes alone, with and without this change; it looks load-sensitive and was not investigated.
+
 ## 2026-11-11: homeassistant 0.5.0 (create_helper: input_boolean, with a prefix, in a category)
 
 Alex asked for helper creation "with prefix and in a category". Design first: section 9d (promoted from the earlier proposal), settings `helper_id_prefix` (default `claude_`) and `helper_category` (empty means the tool refuses), checklist 10g.

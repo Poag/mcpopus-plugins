@@ -309,7 +309,7 @@ class HomeAssistant:
                     cat_id = next((c["category_id"] for c in cats if isinstance(c, dict) and isinstance(c.get("category_id"), str)
                                    and str(c.get("name") or "").casefold() == wanted), None)
                     if cat_id is None:
-                        raise HelperRefused("No helper category with the name in the helper_category setting exists in Home Assistant, so nothing was created. "
+                        raise HelperRefused("No helper category with the name in the claude_category setting exists in Home Assistant, so nothing was created. "
                                             "Create it first (Settings, Devices and services, Helpers, then the category filter), or check the setting.")
                     create_sent = True
                     ok, item, code = await command(ws, {"type": "input_boolean/create", "name": name, "initial": initial})

@@ -11,7 +11,7 @@ ON = Policy(read_only=False, enable_tools=["trigger_automation", "set_automation
 
 
 def acfg(ha, **kw):
-    return values(ha, automation_categories=["Claude"], **kw)
+    return values(ha, claude_category="Claude", **kw)
 
 
 async def trig(c, eid="automation.porch_evening"):
@@ -138,6 +138,6 @@ async def test_rate_limit_is_shared_and_token_stays_secret(ha, tmp_path, caplog)
 
 async def test_status_describes_the_automation_setup(ha, tmp_path):
     async with running_plugin(tmp_path, HOME, acfg(ha), SECRETS) as (c, _, _):
-        assert "categories claude" in (await call(c, "status"))[1]
+        assert "category Claude" in (await call(c, "status"))[1]
     async with running_plugin(tmp_path / "b", HOME, values(ha), SECRETS) as (c, _, _):
         assert "no category set" in (await call(c, "status"))[1]

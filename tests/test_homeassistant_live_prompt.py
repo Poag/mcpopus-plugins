@@ -39,7 +39,7 @@ def live_home(ha):
 
 
 def live_cfg(ha):
-    return values(ha, allowed_services=["light.turn_on", "light.turn_off"], write_entity_allowlist=["light.outside_porch", "light.inside_porch"], automation_categories=["claude"])
+    return values(ha, allowed_services=["light.turn_on", "light.turn_off"], write_entity_allowlist=["light.outside_porch", "light.inside_porch"], claude_category="claude")
 
 
 def swap(base, **kw):
