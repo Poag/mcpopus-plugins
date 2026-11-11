@@ -77,9 +77,11 @@ class Context:
     """What the checks need to know, supplied by the plugin."""
 
     def __init__(self, visible: Callable[[str], bool], exists: Callable[[str], bool], writable: Callable[[str], bool], services: tuple[str, ...],
-                 hidden_by: Callable[[str], str | None] | None = None) -> None:
+                 hidden_by: Callable[[str], str | None] | None = None, own_services: tuple[str, ...] = (), own_entity: Callable[[str], bool] | None = None) -> None:
         self.visible, self.exists, self.writable, self.services = visible, exists, writable, services
         self.hidden_by = hidden_by or (lambda _eid: None)
+        self.own_services = own_services  # services allowed on the owner's own helpers without being listed (allow_own_helpers); empty when off
+        self.own_entity = own_entity or (lambda _eid: False)
 
     def _unavailable(self, eid: str, what: str) -> DefinitionError:
         """Why an entity cannot be used. A policy rule is named because it depends on the id and the settings alone: an id that fails the policy
@@ -243,12 +245,12 @@ def _action(a: Any, ctx: Context) -> tuple[dict[str, Any], str | None]:
         raise DefinitionError("Each action is either {\"delay\": \"00:00:05\"} or {\"service\": \"light.turn_on\", \"entity_id\": \"light.kitchen\", \"data\": {...}}.")
     _only(a, {"service", "entity_id", "data"}, "A service action")
     svc = a["service"].strip().lower() if isinstance(a["service"], str) else ""
-    if not SERVICE_RE.fullmatch(svc) or svc not in ctx.services:
+    if not SERVICE_RE.fullmatch(svc) or (svc not in ctx.services and svc not in ctx.own_services):
         raise DefinitionError("That service is not on the owner's allowed_services list (or does not exist).")  # one answer for both
     eid = ctx.entity(a.get("entity_id"), f"the {svc} action", multiple=False)[0]
     if domain_of(eid) != domain_of(svc):
         raise DefinitionError("The entity must be in the same domain as the service.")
-    if not ctx.writable(eid):
+    if not ((svc in ctx.services and ctx.writable(eid)) or (svc in ctx.own_services and ctx.own_entity(eid))):  # the lists, or the owner's own helpers (design 9e)
         raise DefinitionError(f"The entity {eid} is not on the write list set by the owner, so an automation may not change it.")
     data = a.get("data") if a.get("data") is not None else {}
     if has_template(data):

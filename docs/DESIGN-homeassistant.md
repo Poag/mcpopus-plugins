@@ -1,6 +1,6 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.7.0 (0.7.0: `create_helper` creates the helpers-scope category if it is missing, section 9d control 3; 0.6.1: `status` says whether the category exists for automations and for helpers; 0.4.4 clarified the allow lists and the definition messages, section 5a and 9c control 9; 0.5.0 added `create_helper`, section 9d; 0.6.0 unifies the prefix and the category into `claude_prefix` and `claude_category`, section 5b). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.8.0 (0.8.0: `allow_own_helpers`, section 9e; 0.7.0: `create_helper` creates the helpers-scope category if it is missing, section 9d control 3; 0.6.1: `status` says whether the category exists for automations and for helpers; 0.4.4 clarified the allow lists and the definition messages, section 5a and 9c control 9; 0.5.0 added `create_helper`, section 9d; 0.6.0 unifies the prefix and the category into `claude_prefix` and `claude_category`, section 5b). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
 (`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
 built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d. The definition tools were run live on 10 November 2026 (section 11); section 10f is the corrected second run.
@@ -211,6 +211,7 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `write_entity_allowlist` | empty | Globs. **The write filter**: the entities `call_service` and the actions of saved automations may change. It hides nothing. An entity must match it **and** be visible under the read filter. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
 | `claude_prefix` | `claude_` | **The one prefix for everything Claude creates** (0.6.0; replaces `automation_id_prefix` and `helper_id_prefix`). Automation config ids it may create, change or delete must start with it, and helpers `create_helper` makes are named `<prefix><helper_id>`. Human-written automations never match. 1 to 20 characters, lower-case letters, digits and single underscores, starting with a letter. Section 5b |
 | `claude_category` | empty | **The one category Claude works in** (0.6.0; replaces `automation_categories` and `helper_category`). One Home Assistant category name, case-insensitive. Automations in it (category scope *automation*) can be triggered, enabled and disabled; helpers `create_helper` makes are put in it (scope *helpers*). Empty means no automation can be controlled by category (except those matching `write_entity_allowlist`) and `create_helper` refuses. Section 5b |
+| `allow_own_helpers` | off | When on, Claude may switch on, off and toggle the helpers it created (`input_boolean.<claude_prefix>*`) with `call_service`, and use them in the actions of automations it saves, **without** listing them in `write_entity_allowlist` or the three services in `allowed_services`. Off by default. Section 9e |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
 | `max_results` | 50 | 1 to 500 |
 | `max_history_hours` | 72 | 1 to 720 |
@@ -379,6 +380,24 @@ Controls, all enforced by the plugin before anything is sent:
 Not built: other helper domains (`input_number`, `input_select`, timers...), icons, update, delete, creating any category other than the helpers-scope one above, changing an existing helper's category.
 
 Unverified: python-slugify's treatment of underscores is relied on only through the post-creation id check; the delay before the entity registry entry exists; the exact error code a non-administrator gets over the WebSocket (the plugin treats any refusal of the create command as the administrator case).
+
+## 9e. Using what Claude creates (`allow_own_helpers`, 0.8.0)
+
+Asked for on 11 November 2026: Claude should be able to use the helpers it creates without the owner adding each one, or the services, to the lists; or wildcards in `write_entity_allowlist` and `allowed_services`.
+
+**Wildcards.** `write_entity_allowlist` already takes globs, so `input_boolean.claude_*` covers every helper Claude will ever create with one entry (tested in 0.8.0). `allowed_services` takes exact `domain.service` pairs and **still does**: a pattern such as `input_boolean.*` would also allow services nobody reviewed, including ones added by a later Home Assistant or integration update, and the same syntax on `script.*`, `scene.*` or `homeassistant.*` would hand over arbitrary actions. A wildcard entry is refused at load, naming `allowed_services`, as before.
+
+**The opt-in setting.** `allow_own_helpers` (default off) adds one fixed rule and nothing else. When it is on:
+
+- the services `input_boolean.turn_on`, `input_boolean.turn_off` and `input_boolean.toggle` are allowed **on entities whose id starts with `input_boolean.` plus `claude_prefix`**, whether or not they are in `allowed_services`, and those entities need not be in `write_entity_allowlist`;
+- this holds for `call_service` and for the actions of `save_automation` (so a saved chime can switch Claude's own helper);
+- nothing else changes: the entity must exist and be visible under the read policy (a denied domain or a deny pattern still hides it), the data checks and the one-entity rule apply, the write rate limit applies, a service other than those three on such an entity is refused as before, and those three services on any other entity still need the two lists. An owner's lists are added to the rule, never replaced by it.
+
+Why it is safe to offer. The helpers are the prefix's namespace (the same fence that already confines which automations Claude may change); an `input_boolean` has no effect on the world by itself, only through automations the owner wired to it, and that wiring is the owner's act (for example an Alexa or Apple Home routine that plays a chime when the helper turns on: Claude can then ring the chime, which is the point of the doorbell example). The rule cannot be reached by other domains and cannot grow when Home Assistant adds services. The plugin cannot tell who created a helper, so a helper the owner made by hand with the prefix is covered too; the owner avoids that by not using the prefix for their own helpers.
+
+What it does not do: it does not let Claude run or enable the automations it saves (that stays the category, section 9b), and it does not extend to other helper types.
+
+`status` says when the setting is on and how many matching helpers exist now; `list_services` lists the implied services; the `create_helper` result says whether the new helper is usable straight away.
 
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
@@ -591,7 +610,7 @@ both to Needs approval. The token's user must be an administrator (as for the de
 
 ```
 Test create_helper on the homeassistant connector. For each step report the step, the call, the reply (verbatim for refusals) and PASS or FAIL against "Expect". Do not retry a refusal with other values and do not call any tool not named.
-1. status. Expect: version 0.7.0; a line "Helpers Claude may create: input_boolean helpers named input_boolean.claude_<name>, in the category Claude"; and a line "Category Claude: for automations found ...; for helpers found." If it says for helpers NOT found, that is fine: step 5 creates it (and says so). Also: input_boolean has 3 entities.
+1. status. Expect: version 0.8.0; a line "Helpers Claude may create: input_boolean helpers named input_boolean.claude_<name>, in the category Claude"; and a line "Category Claude: for automations found ...; for helpers found." If it says for helpers NOT found, that is fine: step 5 creates it (and says so). Also: input_boolean has 3 entities.
 2. create_helper with helper_id "door__chime". Expect: refused, helper_id is 1 to 40 lower-case letters, digits and single underscores.
 3. create_helper with helper_id "Doorbell Chime" (with a space). Expect: the same refusal.
 4. search_entities with domain input_boolean. Expect: still exactly 3 (car_30, car_60, car_now): nothing was created by steps 2 and 3.
@@ -608,6 +627,25 @@ Then, in Home Assistant, check by hand: the Helpers page shows `claude_doorbell_
 and the automation in Home Assistant when you have finished (or keep them: the chime is the point). To enable the automation, turn it on in Home Assistant and press the doorbell once; the helper should switch on for
 3 seconds. Optional: set `claude_category` to a name that does not exist and repeat step 5: expect "No helper category ... nothing was created". Optional: use a non-administrator token and repeat step 5: expect the
 "refused the helper command" message, then a pause message on the next call. Not covered by this run: HA's slug rule for ids with several underscores (the plugin checks the id it gets back), and a slow registry.
+
+## 10h. Acceptance checklist for `allow_own_helpers` (Alex, against the real Home Assistant)
+
+Needs the helper from 10g (`input_boolean.claude_doorbell_chime`). Update the plugin to 0.8.0 and, under Policy, tick `call_service` (Needs approval). Leave `allowed_services` and `write_entity_allowlist` as they are (or empty).
+First check it is off: ask Claude to run `call_service` with domain `input_boolean`, service `turn_on`, entity `input_boolean.claude_doorbell_chime`; expect `No such service.` (or "may not change that entity" if your lists name it).
+Then turn `allow_own_helpers` on in the plugin settings, Save, and run `status`: expect "allow_own_helpers is on ... (1 exist now)". Then:
+
+```
+Test allow_own_helpers on the homeassistant connector. For each step report the step, the call, the reply (verbatim for refusals) and PASS or FAIL against "Expect". Do not call any tool not named.
+1. list_services. Expect: a line "Also, because allow_own_helpers is on: input_boolean.turn_on, input_boolean.turn_off, input_boolean.toggle on entities named input_boolean.claude_*".
+2. call_service input_boolean turn_on on input_boolean.claude_doorbell_chime. Approve. Expect: before off, after on.
+3. call_service input_boolean toggle on the same entity. Approve. Expect: after off.
+4. call_service input_boolean turn_on on input_boolean.car_now. Expect: refused, "may not change that entity" (a helper without the prefix).
+5. call_service input_boolean reload on input_boolean.claude_doorbell_chime. Expect: "No such service." (only the three services).
+6. call_service light.turn_on on light.outside_porch. Expect: "No such service." (nothing else was opened up).
+Finish with a table of the 6 steps.
+```
+
+Afterwards check in Home Assistant's logbook that only steps 2 and 3 changed anything, and that `input_boolean.car_now` did not change.
 
 ## 11. Live check results
 

@@ -71,6 +71,16 @@ class EntityPolicy:
         return any(domain_of(t) in known_domains and not self.visible(t) for t in _TOKEN.findall(text.lower()) if ENTITY_RE.fullmatch(t))
 
 
+OWN_HELPER_DOMAIN = "input_boolean"
+OWN_HELPER_SERVICES = ("input_boolean.turn_on", "input_boolean.turn_off", "input_boolean.toggle")  # fixed: all that allow_own_helpers adds (design 9e)
+
+
+def is_own_helper(entity_id: str, prefix: str) -> bool:
+    """An input_boolean whose id starts with the owner's prefix: the namespace Claude's helpers are created in."""
+    e = entity_id.lower()
+    return domain_of(e) == OWN_HELPER_DOMAIN and e.split(".", 1)[1].startswith(prefix) and ENTITY_RE.fullmatch(e) is not None
+
+
 TARGET_KEYS = frozenset({"entity_id", "area_id", "device_id", "label_id", "floor_id", "target"})
 DATA_KEY_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 MAX_DATA_KEYS = 20

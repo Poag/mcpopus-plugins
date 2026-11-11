@@ -106,7 +106,9 @@ class FakeHA:
                          {"domain": "light", "services": {"turn_on": {"name": "Turn on", "description": "Turn on a light.", "fields": {"brightness": {}, "color_name": {}}},
                                                           "turn_off": {"name": "Turn off", "description": "Turn off.", "fields": {}}}},
                          {"domain": "lock", "services": {"unlock": {"name": "Unlock", "description": "Unlock a lock.", "fields": {}}}},
-                         {"domain": "switch", "services": ["turn_on", "turn_off"]}]
+                         {"domain": "switch", "services": ["turn_on", "turn_off"]},
+                         {"domain": "input_boolean", "services": {"turn_on": {"name": "Turn on", "description": "Turn on.", "fields": {}}, "turn_off": {"name": "Turn off", "description": "Turn off.", "fields": {}},
+                                                                   "toggle": {"name": "Toggle", "description": "Toggle.", "fields": {}}, "reload": {"name": "Reload", "description": "Reload.", "fields": {}}}}]
         self.requests: list[tuple[str, str, dict]] = []
         self.writes: list[str] = []  # anything that could change state, or an unexpected command
         self.service_calls: list[tuple[str, str, dict]] = []  # (domain, service, json body) of every POST to /api/services
@@ -211,8 +213,9 @@ class FakeHA:
             elif sv in ("turn_on", "turn_off"):
                 self.states[eid]["state"] = "on" if sv == "turn_on" else "off"
             changed.append(self.states[eid])
-        elif eid in self.states and (d, sv) in {("light", "turn_on"), ("light", "turn_off"), ("switch", "turn_on"), ("switch", "turn_off")}:
-            self.states[eid]["state"] = "on" if sv == "turn_on" else "off"
+        elif eid in self.states and (d, sv) in {("light", "turn_on"), ("light", "turn_off"), ("switch", "turn_on"), ("switch", "turn_off"),
+                                                 ("input_boolean", "turn_on"), ("input_boolean", "turn_off"), ("input_boolean", "toggle")}:
+            self.states[eid]["state"] = ("off" if self.states[eid]["state"] == "on" else "on") if sv == "toggle" else "on" if sv == "turn_on" else "off"
             if "brightness" in body:
                 self.states[eid]["attributes"]["brightness"] = body["brightness"]
             changed.append(self.states[eid])

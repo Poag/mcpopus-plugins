@@ -3,6 +3,28 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.8.0 (allow_own_helpers: use what Claude creates without list entries)
+
+Alex asked whether Claude can use what it creates without adding it to the lists, or whether the lists could take wildcards.
+
+### Decision
+
+- `write_entity_allowlist` **already** takes globs: `input_boolean.claude_*` covers every helper Claude will create. Pinned by a test; the setting text now says so.
+- `allowed_services` stays **exact pairs**, deliberately: a wildcard would also allow services nobody reviewed (including ones a later update adds), and `script.*`, `scene.*` or `homeassistant.*` would hand over arbitrary actions. Wildcard entries are still refused at load, naming the setting (tested).
+- New opt-in `allow_own_helpers` (default off): one fixed rule. `input_boolean.turn_on`, `turn_off` and `toggle` are allowed on entities starting `input_boolean.` + `claude_prefix`, for `call_service` and for the actions of `save_automation`, with no list entries. Nothing else changes: the entity must exist and be visible, a denied `input_boolean` domain switches the rule off, data checks, the one-entity rule and the rate limit apply, other services or other entities still need the lists, and the owner's lists are added to the rule not replaced by it. It does not let Claude run or enable the automations it saves (still the category, design 9b). Design section 9e, checklist 10h.
+
+### Changed
+
+`allow_own_helpers` setting; fixed constants and `is_own_helper` in `policy.py`; the check in `call_service`, in the automation builder's `Context`, in `list_services`, `status` and the `create_helper` result; setting texts. Version 0.8.0.
+
+### Verified
+
+10 tests in `tests/test_homeassistant_own_helpers.py` (the fake gained `input_boolean` services): off by default changes nothing; on, a helper is switched on, toggled and off with no lists, and a saved automation can use it (still saved disabled); it reaches nothing else (a helper without the prefix, another prefix, `reload`, `set_value`, other domains, data targets, a multi-entity action); the prefix setting is the namespace; the read policy still hides helpers and a denied domain turns the rule off; the owner's lists work alongside and the implied services do not leak to listed entities; the rate limit applies; `create_helper` says whether the helper is usable at once; wildcards: the entity list takes globs, the service list refuses them. Fourteen mutation checks each made a test fail (setting ignored; denied domain ignored; prefix ignored; domain ignored, caught by a unit test added after the first run; a fourth service; implied services leaking; call_service or the automation builder ignoring the rule; the rule applying to any entity in automations; the builder given no services; status, `list_services` and `create_helper` text removed). One survivor by design: removing the visibility check inside `_own_entity`, because every caller only sees entities the read policy already allowed (two layers).
+
+### Not verified
+
+On the real Home Assistant (checklist 10h). That the helper's wiring (Alexa routine, Apple Home automation) works is outside the plugin.
+
 ## 2026-11-11: homeassistant 0.7.0 (create_helper creates the helpers category if it is missing)
 
 Alex, after the 0.6.0 refusal ("no helper category"): the plugin should create the category itself.

@@ -20,7 +20,7 @@ from pydantic import ConfigDict, field_validator, model_validator
 from . import text as tx
 from .automations import ID_BODY, Context, DefinitionError, build_config, definition_problem
 from .client import HAError, HelperRefused, HomeAssistant, RegistryUnavailable, Settings, check_base_url, ssl_context
-from .policy import ENTITY_RE, SERVICE_RE, EntityPolicy, check_service_data, domain_of, norm_glob, writable
+from .policy import ENTITY_RE, OWN_HELPER_SERVICES, SERVICE_RE, EntityPolicy, check_service_data, domain_of, is_own_helper, norm_glob, writable
 
 DEFAULT_DENIED_DOMAINS = ["lock", "alarm_control_panel", "camera", "person", "device_tracker", "notify"]
 DEFAULT_REDACTED = ["access_token", "entity_picture", "latitude", "longitude", "gps_accuracy", "ip_address", "mac", "mac_address", "token", "password"]
@@ -50,10 +50,11 @@ class Config(BaseModel):
     entity_allowlist: list[str] = Field([], description="The READ filter. Leave empty to see everything not denied. If you list anything here, ONLY entities matching these patterns are visible and everything else is hidden, including the entities an automation watches (one pattern per line, for example light.* or sensor.kitchen_*). This is not the list of what Claude may change: that is write_entity_allowlist")
     entity_denylist: list[str] = Field([], description="Entities matching these patterns are never visible, whatever the allow list says (one per line)")
     domain_denylist: list[str] = Field(DEFAULT_DENIED_DOMAINS, description="Whole domains that are never visible (one per line). Replacing this list removes the defaults. Suggested defaults, for you to change")
-    allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
-    write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.* or input_boolean.doorbell_chime). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
+    allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on (exact pairs: no wildcards, because a wildcard would also allow services nobody reviewed, including ones added later). Empty means no service may be called. See also allow_own_helpers")
+    write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.*, input_boolean.doorbell_chime or input_boolean.claude_* for everything Claude creates; patterns may use * and ?). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
     claude_prefix: str = Field("claude_", description="The one prefix for everything Claude creates: automation config ids it may create, change or delete must start with it, and helpers it creates are named with it (1 to 20 lower-case letters, digits and single underscores, starting with a letter). Human-written automations never match, so they cannot be changed or deleted")
     claude_category: str = Field("", description="The one Home Assistant category Claude works in (a name, case-insensitive). Automations in it can be triggered, enabled and disabled, and helpers Claude creates are put in it. Create a category with this name for automations (Settings, Automations, Categories); the one for helpers is created for you the first time create_helper needs it. Empty means no automation can be controlled by category and no helper can be created")
+    allow_own_helpers: bool = Field(False, description="When on, Claude may switch on, switch off and toggle the helpers it created (input_boolean entities whose id starts with claude_prefix) with call_service, and use them in the actions of automations it saves, without you listing them in write_entity_allowlist or the three services in allowed_services. Nothing else changes: it must still be visible, and every other entity and service still needs the lists. Off by default")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
     max_results: int = Field(50, ge=1, le=500, description="Most entities or entries returned by one call")
     max_history_hours: int = Field(72, ge=1, le=720, description="Longest window for history and logbook queries")
@@ -301,6 +302,10 @@ class HomeAssistantPlugin(Plugin):
         if legacy:
             lines.append(f"Old settings are still stored and are no longer used: {', '.join(legacy)}. They were replaced by claude_prefix and claude_category (design section 5b); where they agreed, their values were carried over. "
                          "Open the plugin page, check claude_prefix and claude_category, and Save: that removes the old ones.")
+        if cfg.allow_own_helpers:
+            mine = sum(1 for e in states if self._own_entity(e))
+            lines.append(f"allow_own_helpers is on: Claude may switch on, off and toggle input_boolean.{cfg.claude_prefix}* helpers ({mine} exist now) without listing them"
+                         + ("" if self._own_services() else ", but the input_boolean domain is in domain_denylist, so this has no effect") + ". Only if the owner ticked call_service (or save_automation) under Policy.")
         lines.append("Helpers Claude may create: "
                      + (f"input_boolean helpers named input_boolean.{cfg.claude_prefix}<name>, in the category {tx.clean(cfg.claude_category, 80)}. Only if the owner ticked create_helper under Policy, and the token's user is an administrator."
                         if cfg.claude_category else "none (the claude_category setting is empty)."))
@@ -469,9 +474,10 @@ class HomeAssistantPlugin(Plugin):
         cfg = self.ctx.config
         allowed = [s for s in cfg.allowed_services if self.policy.service_allowed(s, tuple(cfg.allowed_services))]
         domain = str(domain or "").strip().lower()
+        own = [sv for sv in self._own_services() if not domain or domain_of(sv) == domain]
         if domain:
             allowed = [s for s in allowed if domain_of(s) == domain]
-        if not allowed:
+        if not allowed and not own:
             return "No services are allowed. This connector cannot call services."
         known = await self._guard(self.ha.services())
         lines = [f"{len(allowed)} allowed service(s). Entities call_service may act on: " + (", ".join(cfg.write_entity_allowlist) if cfg.write_entity_allowlist else "none") + "."]
@@ -483,6 +489,8 @@ class HomeAssistantPlugin(Plugin):
                 continue
             fields = desc.get("fields") if isinstance(desc.get("fields"), dict) else {}
             lines.append(f"- {s} | {tx.clean(desc.get('description') or desc.get('name') or '', 200)}" + (f" | fields: {', '.join(tx.clean(f, 40) for f in list(fields)[:20])}" if fields else ""))
+        if own:
+            lines.append(f"Also, because allow_own_helpers is on: {', '.join(own)} on entities named input_boolean.{cfg.claude_prefix}* (the helpers Claude creates). These need no entry in the lists.")
         return "\n".join(lines)
 
     # ---------------------------------------------------------------- write
@@ -495,14 +503,15 @@ class HomeAssistantPlugin(Plugin):
         d, sv = str(domain or "").strip().lower(), str(service or "").strip().lower()
         pair = f"{d}.{sv}"
         no_service = "No such service."  # one answer for a service that is not allowed and one that does not exist
-        if not SERVICE_RE.fullmatch(pair) or not self.policy.service_allowed(pair, tuple(cfg.allowed_services)):
+        if not SERVICE_RE.fullmatch(pair) or not (self.policy.service_allowed(pair, tuple(cfg.allowed_services)) or pair in self._own_services()):
             return self._refuse(no_service)
         eid = self._entity_id(entity_id)
         if domain_of(eid) != d:
             raise ToolError("The entity must be in the same domain as the service (a light service acts on a light).")
         if eid not in await self._visible_states_guarded():
             return self._refuse("No such entity.")  # hidden and missing look the same, whatever the write list says
-        if not writable(self.policy, self.write_allow, eid):
+        listed = self.policy.service_allowed(pair, tuple(cfg.allowed_services)) and writable(self.policy, self.write_allow, eid)
+        if not (listed or (pair in self._own_services() and self._own_entity(eid))):  # the two lists, or the owner's own helpers (design 9e)
             return self._refuse("This connector may not change that entity (it is not on the write list set by the owner).")
         problem = check_service_data(data if data is not None else {}, eid)
         if problem:
@@ -533,6 +542,13 @@ class HomeAssistantPlugin(Plugin):
         return "\n".join(lines)
 
     # ----------------------------------------------------------- automations
+    def _own_services(self) -> tuple[str, ...]:
+        """The services allow_own_helpers adds (none when it is off, or when the input_boolean domain is denied)."""
+        return OWN_HELPER_SERVICES if self.ctx.config.allow_own_helpers and "input_boolean" not in self.policy.deny_domains else ()
+
+    def _own_entity(self, eid: str) -> bool:
+        return is_own_helper(eid, self.ctx.config.claude_prefix) and self.policy.visible(eid)
+
     def _take_write_slot(self) -> None:
         cfg = self.ctx.config
         now = time.monotonic()
@@ -670,7 +686,8 @@ class HomeAssistantPlugin(Plugin):
         cid = self._config_id(automation_id)
         states = await self._visible_states_guarded()
         allowed = tuple(sv for sv in cfg.allowed_services if self.policy.service_allowed(sv, tuple(cfg.allowed_services)))
-        ctx = Context(self.policy.visible, lambda e: e in states, lambda e: writable(self.policy, self.write_allow, e), allowed, self.policy.hidden_by)
+        ctx = Context(self.policy.visible, lambda e: e in states, lambda e: writable(self.policy, self.write_allow, e), allowed, self.policy.hidden_by,
+                      self._own_services(), self._own_entity)
         try:
             config = build_config(cid, alias, description, mode, triggers, conditions, actions, ctx)
         except DefinitionError as e:
@@ -766,7 +783,9 @@ class HomeAssistantPlugin(Plugin):
             lines.append(f"It was created but Home Assistant would not put it in the category {tx.clean(cfg.claude_category, 80)}. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
         else:
             lines.append("It was created but had not appeared in Home Assistant's entity registry yet, so it is not in a category. Assign the category in Home Assistant (Settings, Devices and services, Helpers).")
-        if writable(self.policy, self.write_allow, shown):
+        if self._own_entity(shown) and self._own_services():
+            lines.append("allow_own_helpers is on, so Claude may switch it on, off and toggle it with call_service and use it in the actions of automations it saves, without any list entry.")
+        elif writable(self.policy, self.write_allow, shown):
             lines.append("It matches write_entity_allowlist, so an allowed service can change it.")
         else:
             lines.append("It does not match write_entity_allowlist, so Claude cannot change it or use it in an automation action yet. To allow that, the owner adds "
