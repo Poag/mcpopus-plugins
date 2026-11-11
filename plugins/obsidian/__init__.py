@@ -425,7 +425,7 @@ class Obsidian(Plugin):
 
     @tool(tier="write")
     async def write_base(self, path: str, content: str, overwrite: bool = False) -> str:
-        """Create an Obsidian Base (.base file) from YAML text. An existing base is refused unless overwrite is true. Only documented structure is accepted: views of type table, list or cards, and the keys filters, formulas, properties, summaries, views; the expressions inside filters and formulas are not checked."""
+        """Create an Obsidian Base (.base file) from YAML text. An existing base is refused unless overwrite is true. Only documented structure is accepted: views of type table, list, cards or kanban (kanban needs groupBy), and the keys filters, formulas, properties, summaries, views; the expressions inside filters and formulas are not checked."""
         v = self.vault
         try:
             v.check_base_writable(path)

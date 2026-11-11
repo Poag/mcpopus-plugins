@@ -90,7 +90,7 @@ class BaseInvalid(ValueError):
 
 
 WRITE_TOP_KEYS = ("filters", "formulas", "properties", "summaries", "views")
-WRITE_VIEW_TYPES = ("table", "list", "cards")
+WRITE_VIEW_TYPES = ("table", "list", "cards", "kanban")
 WRITE_VIEW_KEYS = ("type", "name", "filters", "order", "sort", "limit", "groupBy", "groupOrder", "summaries")
 MAX_WRITE_VIEWS = 30
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -176,6 +176,8 @@ def validate_base_structure(data: Any) -> None:
                 raise BaseInvalid(f"{n} has a key that is not one of {', '.join(WRITE_VIEW_KEYS)}")
         if view.get("type") not in WRITE_VIEW_TYPES:
             raise BaseInvalid(f"{n} type must be one of {', '.join(WRITE_VIEW_TYPES)}")
+        if view["type"] == "kanban" and "groupBy" not in view:
+            raise BaseInvalid(f"{n} is a kanban view and needs groupBy (the columns are its groups)")
         if "name" in view:
             _text(view["name"], f"{n} name", 100)
         if "limit" in view and (isinstance(view["limit"], bool) or not isinstance(view["limit"], int) or not 1 <= view["limit"] <= 10_000):

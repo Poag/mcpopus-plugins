@@ -432,3 +432,11 @@ async def test_it_writes_nothing_and_logs_no_content(couch, tmp_path, caplog):
     assert "couch-pass-123" not in caplog.text and "Ignore all previous" not in caplog.text
     raw = (tmp_path / "audit.jsonl").read_text()
     assert "w.base" not in raw and "book" not in raw and "Ignore all previous" not in raw
+
+
+def test_file_name_has_no_extension_for_notes_and_keeps_it_for_other_files():
+    """Verified on the owner's vault: file.name == "zzqx" listed zzqx.md (10 Nov 2026) and file.name == "Index.base" gave one row (11 Nov 2026)."""
+    note_rec, other = rec("Q/a.md"), rec("Q/Index.base", is_note=False)
+    assert evaluate('file.name == "a"', note_rec) is True and evaluate('file.name == "a.md"', note_rec) is False
+    assert evaluate('file.name == "Index.base"', other) is True and evaluate('file.name == "Index"', other) is False
+    assert evaluate('file.basename == "Index"', other) is True and evaluate('file.ext == "base"', other) is True

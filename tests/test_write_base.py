@@ -72,11 +72,12 @@ def _v(**view):
 VALID = [
     _v(), _v(name="x", limit=10, order=["file.name"], sort=[{"property": "a", "direction": "DESC"}]),
     _v(filters={"and": ['a == "b"', {"or": ["x", {"not": ["y"]}]}]}), _v(groupBy={"property": "p", "direction": "ASC"}, groupOrder=["a"], summaries={"p": "Average"}),
+    {"views": [{"type": "kanban", "name": "kanban", "groupBy": {"property": "file.folder", "direction": "ASC"}, "order": ["file.fullname", "file.links"]}]},  # as Obsidian wrote it, 11 Nov 2026
     {"filters": "file.ext == 'md'", "formulas": {"f": "a + b"}, "properties": {"status": {"displayName": "S"}}, "summaries": {"s": "values.mean()"}, "views": [{"type": "list"}, {"type": "cards"}]},
 ]
 INVALID = [
     ([], "mapping"), ({}, "views"), ({"views": []}, "views"), ({"views": [], "other": 1}, "top-level"), ({"views": "x"}, "views"), ({"views": [1]}, "mapping"),
-    ({"views": [{"type": "kanban"}]}, "type"), ({"views": [{"type": "map"}]}, "type"), ({"views": [{}]}, "type"), (_v(columnSize={"a": 1}), "key"),
+    ({"views": [{"type": "kanban"}]}, "needs groupBy"), ({"views": [{"type": "map"}]}, "type"), ({"views": [{}]}, "type"), (_v(columnSize={"a": 1}), "key"),
     (_v(limit=0), "limit"), (_v(limit=True), "limit"), (_v(limit="5"), "limit"), (_v(limit=10_001), "limit"), (_v(name=""), "name"), (_v(name="x" * 101), "name"),
     (_v(filters=""), "filters"), (_v(filters=5), "filters"), (_v(filters={"and": []}), "list"), (_v(filters={"xor": ["a"]}), "filters"), (_v(filters={"and": ["a"], "or": ["b"]}), "filters"),
     (_v(filters={"and": [5]}), "filters"), (_v(filters="x" * 1001), "filters"), (_v(order="file.name"), "order"), (_v(order=[1]), "order"),
@@ -166,7 +167,7 @@ async def test_edit_is_an_exact_unique_replace_and_the_result_is_checked(couch, 
         await call(c, "write_base", {"path": "Scratch/Probe.base", "content": GOOD})
         n = len(couch.writes)
         for old, new, fragment in [("nothing like this", "x", "not found"), ("file.", "x", "more than once"), ("", "x", "required"),
-                                   ("type: table", "type: kanban", "type must be"), ("limit: 20", "limit: 0", "limit"), ("views:", "bogus:", "top-level"),
+                                   ("type: table", "type: map", "type must be"), ("limit: 20", "limit: 0", "limit"), ("views:", "bogus:", "top-level"),
                                    ("name: Probe", "name: [", "YAML")]:
             err, text = await call(c, "edit_base", {"path": "Scratch/Probe.base", "old_text": old, "content": new})
             assert err and fragment in text, (old, text)
@@ -374,3 +375,19 @@ async def test_data_that_does_not_read_back_identically_is_never_sent(couch, tmp
         err, text = await call(c, "write_base", {"path": "Scratch/Probe.base", "content": GOOD})
         assert err and "internal check" in text
     assert couch.writes == []
+
+
+KANBAN = "views:\n  - type: kanban\n    name: kanban\n    groupBy:\n      property: file.folder\n      direction: ASC\n    order:\n      - file.fullname\n      - file.links\n"
+
+
+async def test_a_kanban_base_can_be_created_and_needs_group_by(couch, tmp_path):
+    async with await run(couch, tmp_path) as (c, _, _):
+        err, text = await call(c, "write_base", {"path": "Scratch/kanban.base", "content": KANBAN})
+        assert not err and "Base created: Scratch/kanban.base" in text and f"sha256 after: {sha(KANBAN.encode())}" in text
+        assert stored_bytes(couch, "scratch/kanban.base") == KANBAN.encode()
+        assert "kanban | 'kanban' | group by file.folder ASC" in (await call(c, "read_base", {"path": "Scratch/kanban.base"}))[1]
+        n = len(couch.writes)
+        err, text = await call(c, "write_base", {"path": "Scratch/k2.base", "content": "views:\n  - type: kanban\n    name: x\n"})
+        assert err and "needs groupBy" in text and len(couch.writes) == n
+        err, text = await call(c, "write_base", {"path": "Scratch/k3.base", "content": KANBAN.replace("kanban\n    name", "map\n    name", 1)})
+        assert err and "type must be" in text and len(couch.writes) == n

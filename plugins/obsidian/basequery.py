@@ -486,8 +486,9 @@ class Ctx:
 def file_value(rec: FileRec, name: str) -> Any:
     if name == "tags":
         return list(rec.tags)
-    # Verified live 10 Nov 2026: file.name has no extension (a base filtering file.name == "zzqx" listed zzqx.md)
-    return {"name": rec.basename, "basename": rec.basename, "path": rec.path, "folder": rec.folder, "ext": rec.ext,
+    # file.name: no extension for a note (verified 10 Nov 2026), the full name for any other file (verified 11 Nov 2026:
+    # a filter file.name == "Index.base" gave one row in Obsidian).
+    return {"name": rec.basename if rec.is_note else rec.name, "basename": rec.basename, "path": rec.path, "folder": rec.folder, "ext": rec.ext,
             "size": rec.size, "ctime": rec.ctime, "mtime": rec.mtime}[name]
 
 

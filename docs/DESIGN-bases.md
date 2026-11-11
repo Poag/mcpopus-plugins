@@ -196,7 +196,7 @@ proposed on 10 Nov 2026 ("Start phase 2").
 | --- | --- |
 | Views | `type: table` only. View keys: `type`, `name`, `filters`, `order`, `sort`, `limit` (all seen in the syntax page or in real files, sections 1.1 and 10.2). Top level: `filters`, `formulas`, `properties`, `summaries`, `views`; `formulas` and `summaries` may be defined but not used |
 | Filters | a string, or `and` / `or` / `not` groups of strings and groups; global and view filters joined with AND (documented). `not` means none of the entries is true (documented: "None of the following are true") |
-| File properties | `file.name` (without extension, verified live), `file.basename`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`; `file.tags` as a column |
+| File properties | `file.name` (without extension for a note, with it for any other file; both verified live), `file.basename`, `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`, `file.mtime`; `file.tags` as a column |
 | Note properties | frontmatter, as `x`, `note.x` or `note["x"]`; values are typed (text, number, true/false, list, date) |
 | File functions | `file.hasTag("a", "b")` (any of; nested tags included), `file.inFolder("f")` (sub-folders included), `file.hasLink("x")`, `file.hasProperty("p")` |
 | Global functions | `now()`, `today()`, `date("YYYY-MM-DD")` and `date("YYYY-MM-DD HH:mm:ss")` |
@@ -220,7 +220,7 @@ what was found and that nothing was computed.
 | Question | Choice here | Visible in the result |
 | --- | --- | --- |
 | Which files are rows | Obsidian lists every file; this index has Markdown notes with contents, and the names, sizes and times of other files. **Only notes are listed.** The same filter is also evaluated on the other files (using file properties only) and their number is reported | "N other files also match and are not listed" |
-| `file.name` | **Corrected in 0.5.1:** excludes the extension (verified by the owner on 10 Nov 2026: `file.name == "zzqx"` listed `zzqx.md`). For non-note files unverified; the same rule is used | |
+| `file.name` | **Corrected in 0.5.1 and 0.6.1:** a note's name excludes the extension (owner, 10 Nov 2026: `file.name == "zzqx"` listed `zzqx.md`); any other file keeps it (owner, 11 Nov 2026: `file.name == "Index.base"` gave one row in Obsidian; 0.5.1 to 0.6.0 used the basename for every file, so a filter on a non-note's name counted wrongly among the "other files") | |
 | Missing value in `<`, `>`, `<=`, `>=` | false, as JavaScript | not flagged |
 | Equality | text, numbers (not true/false), dates compare by value; `null == null`; a missing value equals only `null`; **different types never equal** (JavaScript's loose `"5" == 5` is not applied) | a comparison across types is not matched and the number of notes this happened to is reported |
 | Relational with mixed types, arithmetic on mismatched types, a number or text used as a true/false | not matched, counted as above | "N notes had a comparison between values of different types and were treated as not matching" |
@@ -305,7 +305,7 @@ Both return: the path, the open link, `created` or `replaced` or `edited`, the s
 Refused, naming the first problem and never quoting the text, unless:
 
 - top level is a mapping whose keys are only `filters`, `formulas`, `properties`, `summaries`, `views`;
-- `views` is a non-empty list (at most 30) of mappings; each has `type` one of `table`, `list`, `cards` (`kanban` and `map` need keys that are not verified, so they are refused) and only the keys `type`, `name`, `filters`, `order`, `sort`, `limit`, `groupBy`, `groupOrder`, `summaries`;
+- `views` is a non-empty list (at most 30) of mappings; each has `type` one of `table`, `list`, `cards`, `kanban` (a kanban view must have `groupBy`; from 0.6.1, because Obsidian itself wrote a kanban base with `type`, `name`, `groupBy` and `order` on 11 Nov 2026, section 12.11; `map` needs the Maps plugin and its keys are not verified, so it is refused) and only the keys `type`, `name`, `filters`, `order`, `sort`, `limit`, `groupBy`, `groupOrder`, `summaries`;
 - `name` is text up to 100 characters; `limit` is a whole number from 1 to 10 000 (not true or false); `order` is a list of at most 200 texts of at most 200 characters; `sort` is a list of mappings with exactly `property` (text) and `direction` (`ASC` or `DESC`); `groupBy` is a mapping with `property` (text) and `direction` (`ASC` or `DESC`); `groupOrder` is a list of texts;
 - `filters` (global or view) is a text, or a mapping with exactly one of `and`, `or`, `not`, a non-empty list (at most 100) of texts or further such mappings, nested at most 8 deep; each text is at most 1000 characters;
 - `formulas` and `summaries` map a name to a text up to 1000 characters; `properties` maps a name to a mapping with only `displayName` (text);
@@ -347,7 +347,7 @@ Tools listed only when ticked; `writable_folders` empty, blocked folder, other f
 - **Overwrite default:** off (a write to an existing base is refused unless `overwrite` is true). Decided here as the safe default; tell me to change it.
 - **Delete and move of a `.base`:** not provided in 0.6.0 (12.6). Admin tier tool in a later version, or never?
 - **Strict structure on edit** (12.4): bases carrying keys such as column widths cannot be edited until a sample of such a file is sent and the key is verified.
-- **`kanban`, `map`** views: refused until their keys are verified.
+- **`map`** views: refused until their keys are verified. (`kanban` was allowed in 0.6.1 at the owner's request.)
 
 ### 12.10 Live results (11 November 2026, plugin 0.6.0, `writable_folders` = `Scratch`)
 
@@ -369,3 +369,10 @@ Not verified: the Obsidian side (desktop and phone open the base, an edit made i
 - **Matches:** the notes shown, their paths, and their sizes; sort by name is case-insensitive and ignores the extension for ordering as the plugin does (Bork, Index.base, Large.base, Link Forms, No Links); `file.inFolder("Test")` includes sub-folders (the files are in `Test/Projects`); the 3 "other files" are the 3 bases under `Test` (38 and 2785 bytes agree with `list_bases`), so the count is right.
 - **Differs, as 11.4 says it would:** Obsidian lists non-note files as rows and applies the view's limit over all files, so Index.base and Large.base took two of the 5 places and Overview and Search.base were cut off; the plugin lists notes only and applies the limit to notes, so it shows 4 notes including Overview.
 - **New observation, unverified:** Obsidian showed the name of a base as `Index.base` (extension kept) and of a note as `Bork` (no extension). This may be only how the link in the cell is displayed, or it may mean `file.name` keeps the extension for non-notes. 0.5.1 uses the name without the extension for every file; the notes are verified (`zzqx`), non-notes are not. It affects only the count of "other files" when a filter compares `file.name`. To settle it the owner can change the filter of `Probe.base` to `file.name == "Index.base"` in Obsidian and report how many rows Obsidian shows; the plugin's count can then be compared.
+
+### 12.11 Findings of 11 November 2026, and plugin 0.6.1
+
+- **Phone:** the owner confirmed `Scratch/Probe.base` opens on the phone, and deleted it in Obsidian afterwards; `list_bases` on `Scratch` no longer listed it.
+- **`file.name` of other files:** with the filter `file.name == "Index.base"` Obsidian showed 1 row, so a non-note keeps its extension in `file.name`. 0.6.1 does the same (notes unchanged). Tests: a unit test on both kinds of file; mutation checks made it fail when the name was always the basename and when it always had the extension. Effect: only the count of "other files".
+- **Kanban:** the owner asked for a kanban base called `kanban` in `Scratch`. `Scratch/kanban.base` (155 bytes, 08:45 UTC) was already in the vault when the build session looked; the build session did not create it and does not know which tool made it, but its content is Obsidian's own shape: `type: kanban`, `name: kanban`, `groupBy` (`property: file.folder`, `direction: ASC`), `order` (`file.fullname`, `file.links`), and no other keys. That is a real sample, so 0.6.1 accepts `kanban` views, and requires `groupBy`. Not verified: the keys a kanban view may carry beyond these (for example how Obsidian stores card or column settings), so any other key is still refused.
+- `write_base` and `edit_base` were not available to the build session, so the build session could not create a base itself in this session.
