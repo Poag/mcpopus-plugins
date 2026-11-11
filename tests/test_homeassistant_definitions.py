@@ -117,7 +117,7 @@ async def test_the_subset_refuses_everything_else(ha, tmp_path):
     bad_cases = [
         ({"triggers": [{"type": "event", "event_type": "x"}]}, "Each trigger needs a type"), ({"triggers": [{"type": "webhook"}]}, "Each trigger needs a type"),
         ({"triggers": [{"type": "state", "entity_id": "binary_sensor.door_contact", "to": "{{ 'on' }}"}]}, "template"),
-        ({"triggers": [{"type": "state", "entity_id": "lock.front_door"}]}, "does not exist or is not available"), ({"triggers": [{"type": "state", "entity_id": "sensor.not_real"}]}, "does not exist or is not available"),
+        ({"triggers": [{"type": "state", "entity_id": "lock.front_door"}]}, "domain_denylist"), ({"triggers": [{"type": "state", "entity_id": "sensor.not_real"}]}, "does not exist in Home Assistant"),
         ({"triggers": [{"type": "state", "entity_id": "binary_sensor.door_contact", "platform": "x"}]}, "does not support the field"), ({"triggers": []}, "at least one trigger"),
         ({"triggers": [{"type": "state", "entity_id": "binary_sensor.door_contact"}] * 6}, "at most 5"), ({"triggers": "x"}, "valid list"),
         ({"triggers": [{"type": "numeric_state", "entity_id": "sensor.kitchen_temperature"}]}, "above or below"), ({"triggers": [{"type": "time", "at": "25-00"}]}, "must be a time"),

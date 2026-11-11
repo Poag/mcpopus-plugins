@@ -44,11 +44,11 @@ class Config(BaseModel):
     token: SecretStr = Field(description="A long-lived access token. Create it on a dedicated Home Assistant user's profile page, and revoke it there to cut access. The automation definition tools only work if that user is an administrator; without them a non-administrator is safer")
     verify_tls: bool = Field(True, description="Check the server certificate for https. Turn off only on a trusted network, and prefer ca_certificate")
     ca_certificate: str = Field("", max_length=20_000, description="Extra certificate authority in PEM form, for a private certificate. Leave empty for a public certificate")
-    entity_allowlist: list[str] = Field([], description="Only entities matching one of these patterns are visible (one per line, for example light.* or sensor.kitchen_*). Empty means all except the denied ones")
+    entity_allowlist: list[str] = Field([], description="The READ filter. Leave empty to see everything not denied. If you list anything here, ONLY entities matching these patterns are visible and everything else is hidden, including the entities an automation watches (one pattern per line, for example light.* or sensor.kitchen_*). This is not the list of what Claude may change: that is write_entity_allowlist")
     entity_denylist: list[str] = Field([], description="Entities matching these patterns are never visible, whatever the allow list says (one per line)")
     domain_denylist: list[str] = Field(DEFAULT_DENIED_DOMAINS, description="Whole domains that are never visible (one per line). Replacing this list removes the defaults. Suggested defaults, for you to change")
     allowed_services: list[str] = Field([], description="domain.service pairs that call_service may use, one per line, for example light.turn_on. Empty means no service may be called")
-    write_entity_allowlist: list[str] = Field([], description="Entities call_service may act on (one pattern per line, for example light.*). Empty means none: this is separate from what can be read, and an entity must also be visible. Needs the call_service tool ticked under Policy in the admin UI")
+    write_entity_allowlist: list[str] = Field([], description="The WRITE filter: entities call_service and the actions of saved automations may change (one pattern per line, for example light.* or input_boolean.doorbell_chime). Empty means none. Separate from entity_allowlist: an entity must match this AND be visible under the read filter. It does not hide anything. Needs the tool ticked under Policy in the admin UI")
     automation_categories: list[str] = Field([], description="Automations in these Home Assistant categories (names, one per line) may be triggered, enabled and disabled by the automation tools. Empty means none, except automations matching write_entity_allowlist")
     automation_id_prefix: str = Field("claude_", description="Automations this connector creates, edits or deletes must have a config id starting with this. Human-written automations never do, so they cannot be changed or deleted")
     max_writes_per_minute: int = Field(10, ge=1, le=120, description="Most service calls per minute, on top of the host's own limit")
@@ -239,6 +239,7 @@ class HomeAssistantPlugin(Plugin):
         except RegistryUnavailable as e:
             areas = f"not available: {e}"
         cfg = self.ctx.config
+        changeable = sum(1 for e in states if writable(self.policy, self.write_allow, e))
         lines = [
             f"Connected to Home Assistant {version}; the access token works.",
             f"Plugin version {self.version}; these settings were loaded {time.strftime('%Y-%m-%d %H:%M', time.gmtime(self.loaded_at))} UTC. If you just changed settings and this time is older, "
@@ -248,13 +249,20 @@ class HomeAssistantPlugin(Plugin):
             f"Area information: {areas}",
             "Policy: " + (f"{len(cfg.entity_allowlist)} allow pattern(s); " if cfg.entity_allowlist else "no allow list (all entities not denied); ")
             + f"{len(cfg.entity_denylist)} deny pattern(s); denied domains: {', '.join(sorted(self.policy.deny_domains)) or 'none'}. Anything the policy hides is neither shown nor counted.",
-            f"call_service: {len(cfg.allowed_services)} service(s) allowed; {len(cfg.write_entity_allowlist)} entity pattern(s) it may act on"
+            f"call_service: {len(cfg.allowed_services)} service(s) allowed; {len(cfg.write_entity_allowlist)} entity pattern(s) it may act on "
+            f"(settings allowed_services and write_entity_allowlist; the write list is separate from the allow list above and hides nothing); {changeable} visible entity(ies) match those patterns"
             + (" (none: nothing can be changed)." if not cfg.write_entity_allowlist or not cfg.allowed_services else ".")
             + " It is only available if the owner ticked it under Policy.",
             f"Automation definition tools need the token's user to be an administrator; ids Claude may create or change start with {cfg.automation_id_prefix}.",
             "Automations Claude may trigger or switch: " + (f"categories {', '.join(cfg.automation_categories)}" if cfg.automation_categories else "no category set")
             + (f" plus {len(cfg.write_entity_allowlist)} write pattern(s)" if cfg.write_entity_allowlist else "") + ". Only if the owner ticked the automation tools under Policy.",
         ]
+        if cfg.entity_allowlist:
+            lines.append("Allow list note: entity_allowlist is the READ filter. Because it is set, every entity that does not match it is hidden, including the ones an automation would watch; "
+                         "to let Claude change an entity use write_entity_allowlist instead, and leave entity_allowlist empty unless you want to hide the rest of the home."
+                         + (" WARNING: the allow list matches no entity at all, so nothing is visible. Check the entity_allowlist setting for a typo or an entity that does not exist yet." if not states else ""))
+        if cfg.write_entity_allowlist and cfg.allowed_services and not changeable:
+            lines.append("Write note: write_entity_allowlist is set but no visible entity matches it, so nothing can be changed. Check the patterns, and that the entities exist and are not hidden by the allow list or the denied domains.")
         return "\n".join(lines)
 
     async def _visible_states_guarded(self) -> dict[str, dict]:
@@ -610,12 +618,12 @@ class HomeAssistantPlugin(Plugin):
     @tool(tier="write", untrusted=True)
     async def save_automation(self, automation_id: str, alias: str, triggers: list[dict], actions: list[dict], conditions: list[dict] | None = None,
                               description: str = "", mode: str = "single") -> str:
-        """Create or replace an automation whose id starts with the owner's prefix (default claude_). Only simple triggers (state, numeric_state, time, time_pattern, sun), conditions (state, numeric_state, time, sun) and actions (an allowed service on one allowed entity, or a delay); no templates. New automations start disabled. Triggers and conditions are like {"type": "state", "entity_id": "binary_sensor.door", "to": "on"}; actions like {"service": "light.turn_on", "entity_id": "light.porch", "data": {"brightness": 120}} or {"delay": "00:00:10"}."""
+        """Create or replace an automation whose id starts with the owner's prefix (default claude_). Only simple triggers (state, numeric_state, time, time_pattern, sun), conditions (state, numeric_state, time, sun) and actions (an allowed service on one allowed entity, or a delay); no templates. New automations start disabled. Triggers and conditions are like {"type": "state", "entity_id": "binary_sensor.door", "to": "on"}. For an event entity (a doorbell button, say) use a state trigger with no "to": its state is the time of the last event and is never "on", so a "to" would never match. Actions like {"service": "light.turn_on", "entity_id": "light.porch", "data": {"brightness": 120}} or {"delay": "00:00:10"}."""
         cfg = self.ctx.config
         cid = self._config_id(automation_id)
         states = await self._visible_states_guarded()
         allowed = tuple(sv for sv in cfg.allowed_services if self.policy.service_allowed(sv, tuple(cfg.allowed_services)))
-        ctx = Context(self.policy.visible, lambda e: e in states, lambda e: writable(self.policy, self.write_allow, e), allowed)
+        ctx = Context(self.policy.visible, lambda e: e in states, lambda e: writable(self.policy, self.write_allow, e), allowed, self.policy.hidden_by)
         try:
             config = build_config(cid, alias, description, mode, triggers, conditions, actions, ctx)
         except DefinitionError as e:

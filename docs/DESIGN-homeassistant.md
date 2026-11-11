@@ -1,6 +1,6 @@
 # homeassistant: design
 
-Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.4.0. Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
+Written 6 November 2026. Specification of the `homeassistant` plugin (endpoint `/homeassistant`), version 0.4.4 (0.4.4 clarifies the allow lists and the definition messages, section 5a and 9c control 9). Reads, plus write tools (`call_service`, `trigger_automation`, `set_automation_enabled`, `save_automation`, `delete_automation`) that are off until the owner enables each by name and names what they may touch. Conventions
 and the rules every plugin follows are in [DESIGN.md](DESIGN.md) section 1; the host's plugin contract is in the mcpopus repository
 (`docs/PLUGINS.md`, `docs/SECURITY.md`). Status: the read tools passed a live check on 7 November 2026 (section 11). `call_service` (0.2.0), the automation tools (0.3.0) and the definition tools (0.4.0) are
 built and tested against a fake Home Assistant only; their live checks are sections 10b, 10c and 10d. The definition tools were run live on 10 November 2026 (section 11); section 10f is the corrected second run.
@@ -121,6 +121,31 @@ the entities where a wrong answer or a wrong action matters most. They are sugge
 doors), `climate` and `switch` are not denied by default, and need an explicit decision from Alex before they go on any write
 allowlist (section 9).
 
+## 5a. Which setting does what (0.4.4)
+
+Four settings decide whether Claude can see, and change, an entity. They are separate on purpose: a home is usually read widely (674 to 1003 entities)
+and changed narrowly (a few lights), and one shared list would force either hiding the rest of the home or making everything visible changeable.
+
+| Setting | Question it answers | Empty means | Hides things? |
+| --- | --- | --- | --- |
+| `entity_allowlist` | Which entities may Claude see at all? | everything not denied | **Yes**: once set, everything that does not match is hidden |
+| `entity_denylist`, `domain_denylist` | Which entities are never visible? | nothing extra (the domain list defaults to six domains) | Yes, and always wins |
+| `allowed_services` | Which `domain.service` pairs may be called, or used in a saved automation? | no service | No |
+| `write_entity_allowlist` | Which visible entities may a call or a saved automation's action change? | none | No |
+
+Order for any use of an entity: it must pass the denied domains, the deny patterns and the allow list (visible), exist, and for a change match the write
+list; the service must be in `allowed_services` and in the entity's domain.
+
+**Worked example, the doorbell chime** (trigger `event.doorbell_doorbell`, action `input_boolean.turn_on`, a 3 second delay, `input_boolean.turn_off` on `input_boolean.doorbell_chime`):
+
+- `allowed_services`: `input_boolean.turn_on`, `input_boolean.turn_off`.
+- `write_entity_allowlist`: `input_boolean.doorbell_chime`.
+- `entity_allowlist`: leave **empty**. Both entities are then visible. If you do set it, it must match **both** the trigger and the action entity (`event.doorbell_doorbell` and `input_boolean.doorbell_chime`), and then everything else is hidden.
+- The helper `input_boolean.doorbell_chime` must already exist in Home Assistant (Settings, Devices and services, Helpers). If it is missing or blocked, `save_automation` says which: it names the policy rule, or says the entity does not exist.
+- The trigger is a **state trigger with no `to`**. An event entity's state is the timestamp of its last event (`None`, shown as unknown, before the first), never `on` or `off`, so `to: "on"` would never match. A state trigger with only an `entity_id` fires on every state change, attribute-only changes included (Core `components/event/entity.py`, `components/homeassistant/triggers/state.py`, read 11 November 2026).
+
+The failure reported on 11 November 2026 was an `entity_allowlist` holding one pattern that matched nothing (it showed as `1 allow pattern(s)` and `Visible entities: 0`): the owner's intent was a write permission, which belongs in `write_entity_allowlist`. From 0.4.4 `status` says which setting is which, warns when the allow list matches nothing, and says how many visible entities match the write patterns.
+
 ## 6. Tools
 
 All are tier `read` except `call_service` (tier `write`). All return text that came from Home Assistant, so all except `status` are `untrusted=True` (the host wraps them
@@ -155,11 +180,11 @@ event firing, state setting, WebSocket subscriptions, group, area, device and "a
 | `token` | required (secret) | Long-lived access token of a dedicated Home Assistant user. For the read tools and `call_service`, a non-administrator is enough and safer. The automation definition tools (section 9c) need the user to be an **administrator**: then also mark the user **local only** (section 9c, control 1) |
 | `verify_tls` | true | Turning it off removes the protection of https |
 | `ca_certificate` | empty | PEM text of a private certificate authority |
-| `entity_allowlist` | empty | Globs. Empty means all entities not denied |
+| `entity_allowlist` | empty | Globs. **The read filter.** Empty means all entities not denied. If it lists anything, **only** entities matching it are visible and everything else is hidden from every tool, including the entities an automation trigger would watch. It does not mean "entities Claude may change" (that is `write_entity_allowlist`). See section 5a |
 | `entity_denylist` | empty | Globs. Always wins |
 | `domain_denylist` | the six domains above | Replacing the list removes the defaults |
 | `allowed_services` | empty | `domain.service` pairs, exact; refused at load if the domain is in `domain_denylist`. Empty means no service may be called |
-| `write_entity_allowlist` | empty | Globs for the entities `call_service` may act on. Separate from what can be read: an entity must also be visible. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
+| `write_entity_allowlist` | empty | Globs. **The write filter**: the entities `call_service` and the actions of saved automations may change. It hides nothing. An entity must match it **and** be visible under the read filter. Empty means none. Refused at load if a pattern's domain is in `domain_denylist` |
 | `automation_id_prefix` | `claude_` | Ids Claude may create, change or delete must start with this. Human-written automations never do |
 | `automation_categories` | empty | Names of Home Assistant automation categories (case-insensitive). Automations in these categories can be triggered, enabled and disabled. Empty means none, except automations matching `write_entity_allowlist` |
 | `max_writes_per_minute` | 10 | 1 to 120, on top of the host's own limit |
@@ -187,6 +212,7 @@ Every message names a setting or says what to check; none contains the URL, the 
 | Not JSON | `... returned something that is not JSON. Check that base_url points at Home Assistant ...` |
 | Reply too large | `... larger than the max_response_bytes setting allows ...` |
 | Areas unavailable | `wsproto is missing: install the plugin's packages from its page to get area and device data. Everything else works.` (or the WebSocket variants) |
+| Entity unusable in a saved automation | One of four, chosen by the settings and the id's text only: `cannot be used: its domain (lock) is in the domain_denylist setting`, `... matches the entity_denylist setting`, `... is outside the entity_allowlist setting, so it is hidden (that list is the read filter ...)`, or `does not exist in Home Assistant (or is not available)` (0.4.4; see 9c control 9) |
 | Window too long | `That window is longer than this connector allows (72 hours, the max_history_hours setting).` |
 
 ## 9. Writes (`call_service`, 0.2.0)
@@ -288,8 +314,26 @@ Controls, all enforced by the plugin before anything is sent:
    records argument names only. Home Assistant's own error text is never repeated.
 8. Home Assistant rewrites `automations.yaml` when saving or deleting, so comments in that file are not kept; every save says so.
 
+9. **Which rule blocked an entity (0.4.4).** In the messages of `save_automation` only, an entity id that fails the policy is refused with the rule named (denied
+   domain, deny pattern, or outside the allow list), and an id that passes the policy but is not in Home Assistant is refused as missing. Whether the rule applies
+   depends on the id's text and the owner's settings alone, never on whether Home Assistant has the entity, so a hidden entity and a made-up id in the same
+   rule's reach get the same message (a test compares them), and what exists behind the policy is not revealed. The price is that the policy's shape can be
+   probed (an id is "in a denied domain" or "matches a deny pattern"); the denied domains are already in `status`, and no pattern text is ever shown. This
+   softens the older wording "a hidden entity is indistinguishable from a missing one" for this one tool, at the owner's request (11 November 2026). The read tools,
+   `call_service` and the automation control tools are unchanged and still answer `No such entity.` for both. To restore the single answer, make `Context._unavailable` return the missing-entity message for every case.
+10. **Event entities** are valid state-trigger sources (nothing in the subset excludes a domain other than those the owner denied); use no `to` (section 5a).
+
 Not built: editing automations written by hand (the prefix fence refuses), blueprints, scripts, scenes, traces. Home Assistant 2026 versions
 older than the one read here may differ in field names (unverified).
+
+## 9d. Proposal: creating `input_boolean` helpers (not built)
+
+Asked for on 11 November 2026 as optional. Not built, because it needs decisions that widen what Claude can change, which waits for the owner.
+
+- **How it would work.** Helpers are created over the WebSocket command `input_boolean/create` (name, icon, initial), which is administrator-only. REST cannot create them. The plugin's WebSocket is read-only today (opened per refresh, three list commands, closed), so this adds the plugin's first WebSocket write: one authenticated session, one command, closed, never retried, no subscriptions. Source not yet read for this: `components/input_boolean/__init__.py` (storage collection) must be checked for the field names and the id Home Assistant derives from the name.
+- **Fence.** The entity id comes from the name, so a prefix fence on the name (`claude_`) gives `input_boolean.claude_<name>`; ids not starting `input_boolean.claude_` could not be created, changed or deleted. **This does not fit `input_boolean.doorbell_chime`**: that name has no prefix, so the helper would be `input_boolean.claude_doorbell_chime` and the automation would use that. The owner's alternative is to create `doorbell_chime` by hand in Home Assistant.
+- **Tier and checks.** A new write tool `create_helper` (and, for tidiness, `delete_helper`, admin), each its own host tick and approval, sharing the write rate limit; domain limited to `input_boolean` (no other helper type); name 1 to 40 of `a-z 0-9 _` after the prefix; initial state off; icon from a short list or none; refuse if the entity already exists; the new entity must then be added to `write_entity_allowlist` by the owner (`input_boolean.claude_*`), so creating a helper never makes it writable by itself.
+- **Decisions needed from the owner:** whether to build it at all; the prefix versus a hand-made `doorbell_chime`; whether `delete_helper` is wanted.
 
 ## 10. Acceptance checklist (Alex, against the real Home Assistant)
 
@@ -408,7 +452,7 @@ automation name for the clash test `Inside porch light - day, evening, night`; a
 Test the homeassistant connector. Use only the values written here. For every step report: the step, what you called, the reply (verbatim for refusals), and PASS or FAIL against "Expect". Do not skip a step, do not stop at a failure, and never retry a refusal with different values.
 
 PART 1, read only
-1. status. Expect: version 0.4.3, area information available, call_service "2 service(s) allowed" and 2 entity patterns, categories claude.
+1. status. Expect: version 0.4.4, area information available, call_service "2 service(s) allowed" and 2 entity patterns, categories claude.
 2. list_services. Expect: light.turn_on and light.turn_off, targets light.outside_porch and light.inside_porch.
 3. list_automations. Expect: 8 automations, none starting claude_, all "controllable: no".
 4. get_automation_definition for automation.inside_porch_light_day_evening_night. Expect either a definition or "No definition available." Report which; no pass or fail.
@@ -418,8 +462,8 @@ PART 2, refusals. Each uses save_automation unless stated, and must be refused. 
 6. delete_automation with automation_id "inside_porch_light_day_evening_night". Expect: the same claude_ prefix refusal (not "No such automation.").
 7. action service "light.toggle". Expect: not on the owner's allowed_services list.
 8. action service "lock.unlock" with entity_id "lock.front_door". Expect: the same allowed_services message as step 7.
-9. action entity_id "person.vicki". Expect: "does not exist or is not available".
-10. action entity_id "light.does_not_exist". Expect: the same wording as step 9 apart from the entity id.
+9. action entity_id "person.vicki". Expect: "cannot be used: its domain (person) is in the domain_denylist setting" (0.4.4; before that "does not exist or is not available").
+10. action entity_id "light.does_not_exist". Expect: "does not exist in Home Assistant" (a different message from step 9, because this id passes the policy).
 11. action entity_id "light.lights_red_light". Expect: "not on the write list".
 12. action service "light.turn_on" with entity_id "switch.ev6_charge_port". Expect: must be in the same domain as the service.
 13. action data {"brightness":"{{ 50 }}"}. Expect: template refused.

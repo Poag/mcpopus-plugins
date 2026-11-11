@@ -3,6 +3,33 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-11: homeassistant 0.4.4 (doorbell chime report: allow lists explained, definition messages name the rule)
+
+Owner report: `save_automation` for `claude_doorbell_chime` (trigger `event.doorbell_doorbell`, actions on `input_boolean.doorbell_chime`) failed twice. First with the `allowed_services` message (correct: nothing was allowed yet). Then, after the two input_boolean services were allowed, with "The entity event.doorbell_doorbell in a state trigger does not exist or is not available", while `status` showed `1 allow pattern(s)` and `Visible entities: 0`.
+
+### Diagnosis (live `status` on 11 Nov, plus the code)
+
+- Not a plugin defect in the trigger check. `entity_allowlist` is the READ filter: once it holds any pattern, everything not matching it is hidden, including the trigger entity. One pattern that matches nothing gives 0 visible entities. The pattern text cannot be read through the connector; the likely cause is the helper going into the read list to make it writable. `get_entity` for both entities answers `No such entity.`, so from outside the plugin it cannot be told whether they exist.
+- The event entity trigger itself was accepted in the first attempt (the service check came after it), and the new test saves the whole chime. `write_entity_allowlist` was also empty, so the next failure would have been the write list.
+- Read in Core on 11 Nov: an event entity's state is the timestamp of its last event, `None` before the first, never `on`/`off` (`components/event/entity.py`); a state trigger with only `entity_id` fires on every state change, attribute-only changes included (`components/homeassistant/triggers/state.py`). So the trigger must have no `to`.
+
+### Changed
+
+- `status`: says which setting is the read filter and which the write filter, warns when the allow list matches no entity, and reports how many visible entities match the write patterns (and warns when it is none).
+- Setting descriptions for `entity_allowlist` and `write_entity_allowlist` rewritten (the plugin form shows them).
+- `save_automation` messages name the rule that hides an entity (denied domain, deny pattern, outside the allow list) or say it does not exist. The rule depends on the id and the settings only, so a hidden entity and a made-up id behind the same rule get the same message (tested). This softens "indistinguishable from missing" for this tool only, at the owner's request; the other tools are unchanged. Design 9c control 9 records the trade-off and the one-line revert.
+- Tool text for `save_automation` says to use a state trigger with no `to` for an event entity.
+- Design: new section 5a (which setting does what, with the doorbell example), settings table, error table, 9c controls 9 and 10, section 9d (proposal for a helper-creation tool, not built).
+- Version 0.4.4 in `plugin.toml`; tests in `tests/test_homeassistant_doorbell.py` (8) and updated wording in two older tests.
+
+### Verified
+
+Tests: the doorbell scenario against the fake (saved disabled, no `to`, nothing run, nothing enabled); the reported mistake (helper in the allow list hides the trigger; status says so; 0 visible warns); both entities in the allow list work; the write list hides nothing; each message names its rule; hidden-existing and made-up ids behind the same rule give the same message; a missing helper is reported as missing. Mutation checks, each made a test fail: the rule never named; the allow rule not reported; the deny rule reported as the domain rule; the reason not passed in; the status warning, allow note and write note removed; the event-entity guidance removed. Surviving by design: removing only `Context`'s own visibility check, because `save_automation` passes only visible states (two layers); removing both fails the tests.
+
+### Not verified
+
+Anything on the real Home Assistant: the owner's actual allow pattern; that the real doorbell event entity behaves as the Core source says; that the saved chime fires. The helper tool is design only.
+
 ## 2026-11-10: homeassistant hand-over, corrected live checklist (no plugin change, still 0.4.3)
 
 Took over the plugin. CI green on `main` (bb0f98a, run 33). 71 homeassistant and requirements tests pass locally against host 0.3.0. No behaviour change, so no version bump.

@@ -76,8 +76,23 @@ def _duration(v: Any, what: str, maximum: int = 86_400) -> str:
 class Context:
     """What the checks need to know, supplied by the plugin."""
 
-    def __init__(self, visible: Callable[[str], bool], exists: Callable[[str], bool], writable: Callable[[str], bool], services: tuple[str, ...]) -> None:
+    def __init__(self, visible: Callable[[str], bool], exists: Callable[[str], bool], writable: Callable[[str], bool], services: tuple[str, ...],
+                 hidden_by: Callable[[str], str | None] | None = None) -> None:
         self.visible, self.exists, self.writable, self.services = visible, exists, writable, services
+        self.hidden_by = hidden_by or (lambda _eid: None)
+
+    def _unavailable(self, eid: str, what: str) -> DefinitionError:
+        """Why an entity cannot be used. A policy rule is named because it depends on the id and the settings alone: an id that fails the policy
+        gets the same answer whether or not Home Assistant has it, so what exists behind the policy is not revealed."""
+        rule = self.hidden_by(eid)
+        if rule == "domain":
+            return DefinitionError(f"The entity {eid} in {what} cannot be used: its domain ({eid.split('.', 1)[0]}) is in the domain_denylist setting.")
+        if rule == "deny":
+            return DefinitionError(f"The entity {eid} in {what} cannot be used: it matches the entity_denylist setting.")
+        if rule == "allow":
+            return DefinitionError(f"The entity {eid} in {what} cannot be used: it is outside the entity_allowlist setting, so it is hidden "
+                                   "(that list is the read filter: anything it does not match is invisible. Run status to see whether an allow list is set).")
+        return DefinitionError(f"The entity {eid} in {what} does not exist in Home Assistant (or is not available).")
 
     def entity(self, value: Any, what: str, multiple: bool = True) -> list[str]:
         items = value if isinstance(value, list) else [value]
@@ -89,7 +104,7 @@ class Context:
             if not ENTITY_RE.fullmatch(eid):
                 raise DefinitionError(f"{what} must name entities like light.kitchen.")
             if not self.visible(eid) or not self.exists(eid):
-                raise DefinitionError(f"The entity {eid} in {what} does not exist or is not available.")  # hidden and missing look the same
+                raise self._unavailable(eid, what)
             out.append(eid)
         return out
 

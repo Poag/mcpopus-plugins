@@ -47,6 +47,20 @@ class EntityPolicy:
             return False
         return not self.allow or any(fnmatch.fnmatchcase(e, p) for p in self.allow)
 
+    def hidden_by(self, entity_id: str) -> str | None:
+        """Which rule hides this id: "domain", "deny" or "allow" (checked in that order), or None when it is visible.
+
+        The answer depends on the id's text and the settings only, never on whether Home Assistant has the entity, so naming the rule
+        reveals nothing about what exists. Used only for owner-facing messages of the definition tools."""
+        e = entity_id.lower()
+        if domain_of(e) in self.deny_domains:
+            return "domain"
+        if any(fnmatch.fnmatchcase(e, p) for p in self.deny):
+            return "deny"
+        if self.allow and not any(fnmatch.fnmatchcase(e, p) for p in self.allow):
+            return "allow"
+        return None
+
     def service_allowed(self, service: str, allowed: tuple[str, ...]) -> bool:
         return service in allowed and domain_of(service) not in self.deny_domains
 
