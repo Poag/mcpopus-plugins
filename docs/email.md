@@ -189,3 +189,69 @@ GUIDE_EMAIL.md section 4, enter the Fire URL and token, **Save and reload**, the
 3. Check the message is still unread in the mail client.
 4. Restart the plugin (Save and reload), send another message, and confirm exactly one session starts (no replay of earlier mail).
 5. Optional: rotate the token on the task page without updating the plugin, send a message, and confirm `mailbox_status` says to check `notify_token`.
+
+## 11. Proposal: sending, drafts, attachments and mailbox changes (design only, nothing built, 13 November 2026)
+
+Alex asked (13 November 2026) to add the remaining email features: sending, attachments and the rest. This section sets out what they
+involve and what must be decided before any code. Each group below would be its own release behind its own acceptance gate
+(DESIGN.md rule 3), starting with the safest.
+
+### 11.1 The risk that shapes everything
+
+A session that reads mail from strangers, holds private data and can send mail has all three parts of the usual exfiltration route:
+text written by an attacker, access to the owner's data, and a way out. A hostile message could try to make the session mail the
+owner's data to the attacker. Decision 7 of section 2 already says reading plugins carry no acting tools. The controls below follow
+from that; none of them removes the risk, they limit what a successful injection can do.
+
+### 11.2 Feature groups, in the order I would build them
+
+| Group | Tools (tier) | Notes |
+| --- | --- | --- |
+| A. Attachments, read side (0.4.0) | `list_attachments`, `read_attachment` (read, untrusted) | Tool results are text only. Returns text for text-like types (plain text, CSV, calendar, HTML converted as in 6) with a size cap; for PDF only if a pinned text-extraction package is added through `requirements` (host 0.3.0 installs it; the package, its hashes and the memory cost need checking first); images and other binaries are described (name, type, size), never returned. Nothing is written to disk. Attachment parsing of hostile files is a real attack surface and gets its own limits (decompression, page and nesting caps) |
+| B. Mailbox changes (0.5.0) | `mark_read`, `mark_unread` (write); `move_message` (write); `delete_message` (admin) | The first use of `SELECT`, `STORE`, `COPY` and `EXPUNGE`, so the read-only test fakes and the "never writes" assertions change: reading tools still must never issue them. Delete would move to the Trash folder, not expunge, and only the owner's named folder is a valid destination (no folder creation). Each tool off until ticked by name in the host policy |
+| C. Drafts (0.6.0) | `create_draft` (write) | `APPEND` to the Drafts folder only. The owner reviews it in the mail client. Nothing leaves the mailbox |
+| D. Sending (0.7.0) | `send_draft` (write) and, only if chosen in 11.5, `send_message` / `reply_to_message` (write) | SMTP over TLS. See 11.3 |
+| E. Outgoing attachments | within D | Only plain text attachments created by Claude from its own text (for example a `.txt`, `.csv` or `.ics`), or a forward of an attachment from a message already in the mailbox. There is no file access in the host, so no file can come from the owner's disk or vault |
+
+### 11.3 Sending controls (group D)
+
+| Control | Proposal |
+| --- | --- |
+| Recipient allowlist | Setting `allowed_recipients`: exact addresses or whole domains. **Empty by default, so nothing can be sent.** A recipient not on it is refused with a message naming the setting. Replying to the sender of a message in the mailbox is a separate switch, `allow_reply_to_sender` (default off), because the From address is written by the sender |
+| Fixed sender | The From address is the configured mailbox; no tool argument can change it, nor add Reply-To, Bcc or arbitrary headers |
+| Recipients per message | At most 3 (setting). Cc is only allowed to allowlisted addresses |
+| Rate | At most 5 an hour and 20 a day (settings), counted in memory and persisted nowhere (a reload resets it; stated in the guide) |
+| Content | Plain text only; subject 200 characters, body 20 000 (settings); no remote content; control characters and header injection rejected before SMTP; the plugin builds the message, never a raw string from the model |
+| Review | Recommended in claude.ai: set the send tool to "Needs approval". In draft-first mode (11.5) the owner also reads the full text in the Drafts folder before approving |
+| Autonomous sessions | The scheduled triage and water tasks should **not** have the sending connector attached. Sending belongs in an interactive chat with approval. The guide will say so |
+| Audit | The host's audit log records each call; the plugin logs recipient count and result, never addresses, subject or body |
+
+### 11.4 Settings added (all optional; none set means 0.3.1 behaviour)
+
+`smtp_host`, `smtp_port` (465, implicit TLS; STARTTLS on 587 only if chosen in 11.5), `smtp_username` and `smtp_password` (default: the IMAP
+login), `from_name`, `allowed_recipients`, `allow_reply_to_sender`, `max_recipients`, `max_per_hour`, `max_per_day`, `max_subject_chars`,
+`max_body_chars_out`, `drafts_folder`, `trash_folder`, `max_attachment_bytes`. Values are trimmed and errors name the setting, never the value.
+
+### 11.5 Decisions for Alex
+
+1. **Same plugin or a separate one?** My recommendation: a separate plugin (working name `email-send`) with its own endpoint, so a
+   connector that only reads can never gain a send tool by a settings change, and so the sending connector is attached only where needed.
+   Cost: its own login settings and its own tests. Alternative: tools in `email`, off until ticked in the host policy.
+2. **Draft-first or direct send?** Draft-first (`create_draft` then `send_draft` by id) lets you read the exact text in your mail client
+   before approving; direct send is quicker but the approval prompt shows only what the tool call carries. Recommendation: draft-first.
+3. **Recipient policy:** allowlist only, or allowlist plus replying to the sender of a received message?
+4. **Mailbox changes:** which of mark read or unread, move and delete do you want, and into which named folders may mail be moved?
+5. **Attachments:** what do you need to read (PDFs? images are not possible)? For sending: is "text files made by Claude, or forwarding a
+   received attachment" enough?
+6. **SMTP details:** the AgentMail SMTP host and port, and whether it sends through the same login. I could not check: the AgentMail
+   documentation host (`docs.agentmail.to`) is outside this session's allowed network domains. Gmail and others differ.
+7. **Autonomous sessions:** confirm that no scheduled task gets the sending connector.
+
+### 11.6 Tests and verification plan
+
+Real host manager and MCP client, a fake IMAP server that now also accepts `APPEND`, `STORE`, `COPY` and `EXPUNGE` (recorded, and
+asserted never to arrive from a read tool), and a fake SMTP server over TLS. Cases: recipient not on the allowlist, header injection in
+every argument, rate limits, size caps, From not changeable, the reply switch, attachment limits and hostile attachment files, secrets
+absent from logs, results and audit, tools absent until enabled. A mutation check for each protection. Not verifiable here: a real
+provider's SMTP behaviour, its sending limits and spam handling, deliverability, and the real approval prompt; those go on a live checklist
+with real addresses filled in.
