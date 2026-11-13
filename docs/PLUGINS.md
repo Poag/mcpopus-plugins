@@ -9,7 +9,6 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 | Plugin | Version | Tools (tier) | Design | Set-up |
 | --- | --- | --- | --- | --- |
 | `obsidian` | see `plugins/obsidian/plugin.toml` | read, search, list, tags, metadata, list_bases, read_base, query_base (read); write, edit, move (write); delete (admin) | [DESIGN.md](DESIGN.md), [DESIGN-bases.md](DESIGN-bases.md) | [GUIDE_CLAUDE.md](GUIDE_CLAUDE.md) |
-| `email` | see `plugins/email/plugin.toml` | folders, messages, search, read (all read); optional new-mail notice to a Claude Code scheduled task (no tool) | [email.md](email.md) | [GUIDE_EMAIL.md](GUIDE_EMAIL.md) |
 | `homeassistant` | see `plugins/homeassistant/plugin.toml` | status, search, get entity, get states, history, logbook, areas, services (read); call_service, trigger_automation, set_automation_enabled, save_automation, create_helper (write); delete_automation (admin); list_automations, get_automation_definition (read) | [DESIGN-homeassistant.md](DESIGN-homeassistant.md) | section 10 of the design |
 | `swarmui` | see `plugins/swarmui/plugin.toml` | status, models, LoRAs, describe, parameters, images, job status (read); generate, cancel (write) | [DESIGN-swarmui.md](DESIGN-swarmui.md) | section 12 of the design |
 
@@ -17,7 +16,7 @@ set each one up. Install steps are common to all: **Plugins**, **Fetch**, **Inst
 
 The host image carries only what the host itself needs (`mcp`, `starlette`, `uvicorn`, `pydantic`, `cryptography`, `argon2-cffi`, `jinja2`, `httpx2`, `segno`, `pip`).
 A plugin that needs anything else lists exact pins in `requirements` in its `plugin.toml` and sets `min_host_version = "0.3.0"`. In this repository:
-`homeassistant` and `swarmui` list `wsproto` and `h11`; `obsidian` lists `PyYAML`; `email` needs nothing (standard library only). All are hashed and
+`homeassistant` and `swarmui` list `wsproto` and `h11`; `obsidian` lists `PyYAML`. All are hashed and
 wheels only. **To apply an update:** on the host's Plugins page fetch the update and apply it (the host shows the packages first; tick the trust box), then
 reconnect the connector in claude.ai so it re-reads the tool list. The host installs from PyPI (`pypi.org`, `files.pythonhosted.org`).
 `tests/test_requirements.py` checks every manifest with the host's own parser and that no plugin imports a package that is neither the host's nor listed.

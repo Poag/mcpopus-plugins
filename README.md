@@ -13,7 +13,6 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | Run the host itself | [mcpopus: docs/DEPLOY.md](https://github.com/Poag/mcpopus/blob/main/docs/DEPLOY.md) |
 | Write my own plugin | [mcpopus: docs/PLUGINS.md](https://github.com/Poag/mcpopus/blob/main/docs/PLUGINS.md) |
 | Understand how the Obsidian plugin works | [docs/DESIGN.md](docs/DESIGN.md) |
-| Set up the email (IMAP) plugin | [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md) |
 | Set up the Home Assistant plugin | [docs/DESIGN-homeassistant.md](docs/DESIGN-homeassistant.md) (section 10) |
 | Set up the SwarmUI plugin | [docs/DESIGN-swarmui.md](docs/DESIGN-swarmui.md) (section 12) |
 | Check what is trusted and what is not | [mcpopus: docs/SECURITY.md](https://github.com/Poag/mcpopus/blob/main/docs/SECURITY.md) |
@@ -21,11 +20,10 @@ served at its own path and added to claude.ai as its own connector. This reposit
 | Plugin | What it does | State |
 | --- | --- | --- |
 | [`obsidian`](plugins/obsidian) | Read, search and list an Obsidian vault kept by Self-hosted LiveSync (CouchDB), with end-to-end encryption and obfuscated paths supported, and folders that can be blocked from the model | Read, search, list, tags, and Obsidian Bases (`.base`) files (`list_bases`, `read_base`, and `query_base`, which works out which notes a base would list), and, off by default, folder-limited write, move and delete of notes and `write_base` / `edit_base` for bases (0.6.1; created, never overwritten unless asked; no base delete or move yet) ([design](docs/DESIGN-bases.md)) |
-| [`email`](plugins/email) | Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list, search and read messages | Read-only: nothing is marked read, moved or deleted. No write tools. Optional (off by default): checks for new mail and tells a Claude Code scheduled task, ids only |
 | [`homeassistant`](plugins/homeassistant) | Read the state of a Home Assistant home: entities, areas, history, logbook, with entity and domain policy enforced by the plugin | Read tools, plus write tools (`call_service`, automation trigger, enable and save, `create_helper`) that are off until enabled and allowed by name. Area data needs `wsproto`, which the plugin installs through the host (host 0.3.0) |
 | [`swarmui`](plugins/swarmui) | Generate images with a SwarmUI (Stable Diffusion) instance within enforced limits; list models, LoRAs, parameters and history | Read tools, plus generate and cancel (write, off until enabled). Images are not shown to Claude |
 
-Design and specification: [docs/DESIGN.md](docs/DESIGN.md) and [docs/email.md](docs/email.md). Email set-up: [docs/GUIDE_EMAIL.md](docs/GUIDE_EMAIL.md). Catalogue: [docs/PLUGINS.md](docs/PLUGINS.md). Build log: [docs/BUILD_LOG.md](docs/BUILD_LOG.md). Third-party notices: [NOTICE.md](NOTICE.md).
+Design and specification: [docs/DESIGN.md](docs/DESIGN.md). Catalogue: [docs/PLUGINS.md](docs/PLUGINS.md). Build log: [docs/BUILD_LOG.md](docs/BUILD_LOG.md). Third-party notices: [NOTICE.md](NOTICE.md).
 
 ## Install
 

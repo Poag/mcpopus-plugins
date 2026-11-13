@@ -158,6 +158,14 @@ Tests: the doorbell scenario against the fake (saved disabled, no `to`, nothing 
 
 Anything on the real Home Assistant: the owner's actual allow pattern; that the real doorbell event entity behaves as the Core source says; that the saved chime fires. The helper tool is design only.
 
+## 2026-11-13: email plugin removed
+
+Alex decided the email plugin was more trouble than it was worth and asked for it to be removed. Deleted: `plugins/email/` (0.3.1), `docs/email.md`, `docs/GUIDE_EMAIL.md`, `tests/test_email.py`, `tests/test_email_notify.py` and `tests/fake_imap.py`,
+and the email rows in the README, `docs/PLUGINS.md` and `docs/DESIGN.md` (its section 5). `make_cert`, the one helper the Home Assistant and SwarmUI tests took from `fake_imap.py`, moved to `tests/tlscert.py`.
+The email entries below stay as the record of what was built; their links to the deleted documents no longer resolve. The code and design are in the git history (last commit that holds them: `4d4ca8b`); `git revert` of the removal commit restores them.
+State at removal: 0.3.0 and 0.3.1 passed one live notification test on the owner's mailbox (a new message started the scheduled task and was reported once); the design for sending, drafts and attachments (section 11 of `docs/email.md`) was never built.
+The host's plugin list, the claude.ai connector and any scheduled task or credential made for it are outside this repository and still need removing by the owner.
+
 ## 2026-11-13: email 0.3.1, status warns when no folder is watched
 
 First live run of 0.3.0 on the owner's mailbox (imap.agentmail.to, 4 visible folders: INBOX, Sent, Drafts, Archive): `mailbox_status` read "0 folders watched ... 23 checks so far,

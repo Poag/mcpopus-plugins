@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from conftest import plugin_module, running_plugin, serve_app
-from fake_imap import make_cert
+from tlscert import make_cert
 from fake_swarm import NEEDED, TOKEN, FakeSwarm
 from test_homeassistant import serve_tls
 

@@ -75,7 +75,7 @@ def test_the_import_check_catches_an_unlisted_package():
 
 def test_the_packages_each_plugin_needs_are_listed():
     """The plugins that were found to need packages when this was written, and what they list. Update with the plugin, not to make this pass."""
-    wanted = {"homeassistant": {"wsproto", "h11"}, "swarmui": {"wsproto", "h11"}, "obsidian": {"pyyaml"}, "email": set()}
+    wanted = {"homeassistant": {"wsproto", "h11"}, "swarmui": {"wsproto", "h11"}, "obsidian": {"pyyaml"}}
     from mcpopus.packages import normalise
 
     for plugin in PLUGIN_DIRS:

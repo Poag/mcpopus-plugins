@@ -10,7 +10,7 @@ import uvicorn
 
 from conftest import plugin_module, running_plugin, serve_app
 from fake_ha import TOKEN, FakeHA
-from fake_imap import make_cert
+from tlscert import make_cert
 
 SECRETS = {"token": TOKEN}
 HOME = "homeassistant"
