@@ -105,7 +105,7 @@ async def watched(imap, tmp_path, fire, **extra):
                     await asyncio.sleep(0.01)
                 async with poller._lock:
                     pass
-            assert poller.ticks == 1 and poller.last_result != "no check yet" and poller.state  # the baseline is complete, and no second check ran
+            assert poller.ticks == 1 and poller.last_result != "no check yet" and (poller.state or poller.watching == 0)  # the baseline is complete, and no second check ran
             yield c, poller, transport
 
 
@@ -141,6 +141,9 @@ async def test_off_by_default_and_status_says_so(imap, tmp_path):
 async def test_first_check_only_sets_a_baseline_then_new_mail_is_reported_once(imap, tmp_path, fire):
     async with watched(imap, tmp_path, fire) as (c, poller, transport):
         assert fire.requests == []  # existing mail is never replayed
+        assert poller.watching == 3  # INBOX, Projects/work and Private; the blocked Spam folder is not counted
+        _, text = await call(c, "mailbox_status")
+        assert "3 folders watched" in text
         add(imap, "INBOX", 3)
         add(imap, "Projects/work", 11)
         await poller.tick()
@@ -153,6 +156,16 @@ async def test_first_check_only_sets_a_baseline_then_new_mail_is_reported_once(i
         await poller.tick()
         assert len(fire.requests) == 1  # nothing new, nothing sent
         assert poller.pending_count() == 0
+
+
+async def test_status_warns_when_no_folder_is_being_watched(imap, tmp_path, fire):
+    async with watched(imap, tmp_path, fire, notify_folders=["Inbox2", "Nope"]) as (c, poller, _):
+        assert poller.watching == 0
+        add(imap, "INBOX", 3)
+        await poller.tick()
+        assert fire.requests == [] and "no folder is being watched" in poller.last_result and "nothing new waiting" not in poller.last_result
+        _, text = await call(c, "mailbox_status")
+        assert "WARNING: no folder is being watched" in text and "names 2 folder(s) (Inbox2; Nope)" in text
 
 
 async def test_payload_has_ids_only_never_mail_text(imap, tmp_path, fire):

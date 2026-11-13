@@ -157,7 +157,7 @@ class Poller:
 
     async def _deliver(self) -> None:
         if not self.pending:
-            self.last_result = "ok, nothing new waiting"
+            self.last_result = "ok, nothing new waiting" if self.watching else "no folder is being watched, so nothing can be reported"
             return
         now = self._clock()
         if now < self.pause_until:

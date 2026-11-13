@@ -158,6 +158,14 @@ Tests: the doorbell scenario against the fake (saved disabled, no `to`, nothing 
 
 Anything on the real Home Assistant: the owner's actual allow pattern; that the real doorbell event entity behaves as the Core source says; that the saved chime fires. The helper tool is design only.
 
+## 2026-11-13: email 0.3.1, status warns when no folder is watched
+
+First live run of 0.3.0 on the owner's mailbox (imap.agentmail.to, 4 visible folders: INBOX, Sent, Drafts, Archive): `mailbox_status` read "0 folders watched ... 23 checks so far,
+last result: ok, nothing new waiting". With nothing watched no notification can ever be sent, so the "ok" was misleading and the owner's NOTIFYTEST message could not
+have been reported. Not reproduced: with `notify_folders` empty the fake server gives every visible folder (asserted now, 3 of 3), so the cause on the real host is
+probably a `notify_folders` value that matches no folder name; the owner's setting has not been seen. 0.3.1 changes the message only: with 0 watched the result says so,
+and `mailbox_status` adds a WARNING naming the configured `notify_folders` values. No behaviour of polling or sending changed.
+
 ## 2026-11-11: email 0.3.0, new-mail notification (off by default)
 
 Alex asked for the plugin to poll and call back to Claude. His decisions: an API call to Anthropic's endpoint, ids only, memory-only baseline, watch every

@@ -1,4 +1,4 @@
 name = "email"
-version = "0.3.0"
+version = "0.3.1"
 description = "Read a mailbox over any IMAP server (Gmail, AgentMail, Fastmail and others): list folders, search and read messages. Read-only; nothing is marked read or changed. Optionally tells a Claude Code scheduled task, with message ids only, when new mail arrives."
 min_host_version = "0.1.0"

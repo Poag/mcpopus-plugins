@@ -149,8 +149,14 @@ class Email(Plugin):
         p = self.poller
         if p is None:
             return "New-mail notifications are off (the notify_url setting is empty)."
-        return (f"New-mail notifications are on: {p.watching} folders watched every {int(p.interval)} seconds, {p.ticks} checks so far, "
+        line = (f"New-mail notifications are on: {p.watching} folders watched every {int(p.interval)} seconds, {p.ticks} checks so far, "
                 f"last result: {p.last_result}; {p.pending_count()} waiting to be sent. Nothing is remembered across a reload.")
+        if p.ticks and not p.watching and not p.last_result.startswith("mail check failed"):
+            named = [clean(x, 60) for x in self.ctx.config.notify_folders]
+            line += (" WARNING: no folder is being watched. " + (f"The notify_folders setting names {len(named)} folder(s) ({'; '.join(named)}) and none matches a visible folder exactly. "
+                     if named else "notify_folders is empty, so every visible folder should be watched; check readable_folders and blocked_folders. ")
+                     + "Fix the setting, or the connector will never report new mail.")
+        return line
 
     @tool(tier="read")
     async def list_folders(self) -> str:
