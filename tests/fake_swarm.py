@@ -71,6 +71,8 @@ class FakeSwarm:
         self.ws_enabled = True
         self.ws_reject_session = False  # make only the WebSocket say the session is invalid
         self.ws_attempts = 0
+        self.ws_odd_frames = False  # send a binary frame and a text frame that is not JSON between the messages
+        self.ws_drop_before_image = False  # close the stream after the progress messages, with no image and no error
         self.status_override: int | None = None
         self.body_override: bytes | None = None
         self.stop = asyncio.Event()
@@ -164,9 +166,15 @@ class FakeSwarm:
             await ws.send_json({"status": {"waiting_gens": 1, "loading_models": 0, "waiting_backends": 0, "live_gens": 0}})
             for pct in (0.25, 0.5):
                 await ws.send_json({"gen_progress": {"batch_index": "0", "overall_percent": pct, "current_percent": 0.5, "preview": "data:image/jpeg;base64," + "A" * 3000}})
+                if self.ws_odd_frames:
+                    await ws.send_bytes(b"\x89PNG-preview-bytes")
+                    await ws.send_text("not json at all")
                 await asyncio.sleep(self.delay / 4 if self.delay else 0)
             if self.gen_error:
                 await ws.send_json({"error": self.gen_error})
+                await ws.close()
+                return
+            if self.ws_drop_before_image:
                 await ws.close()
                 return
             if not self.empty_result:

@@ -243,6 +243,30 @@ async def test_websocket_problems_are_reported_not_retried(sw, tmp_path):
     assert len(sw.generations) == n  # a failed WebSocket never silently starts a second generation over HTTP
 
 
+async def test_frames_that_are_not_json_do_not_end_the_generation(sw, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    sw.ws_odd_frames = True  # seen live: a job stopped at 70 percent and was reported failed although SwarmUI saved the image
+    async with running_plugin(tmp_path, SW, values(sw, progress_updates=True), SECRETS, policy=ON) as (c, _, _):
+        _, t = await gen(c)
+        assert "done" in t and "View/local/raw/2026-11-08/" in t and "failed" not in t and "lost" not in t
+    assert len(sw.generations) == 1
+    assert "swarmui websocket ended: WebSocketDisconnect, 1 image(s), 4 frame(s) skipped" in caplog.text
+
+
+async def test_a_stream_that_ends_without_an_image_is_lost_not_failed_and_never_rerun(sw, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    sw.ws_drop_before_image = True
+    async with running_plugin(tmp_path, SW, values(sw, progress_updates=True), SECRETS, policy=ON) as (c, _, _):
+        _, t = await gen(c)
+        assert "lost" in t and "failed" not in t and "list_images" in t and "Nothing was started a second time" in t
+        job = body(t).split("job ")[1].split(":")[0]
+        assert "lost" in (await call(c, "get_generation", {"job_id": job}))[1]
+        sw.ws_drop_before_image = False
+        assert "done" in (await gen(c))[1]  # a lost job does not hold the concurrency slot
+    assert len(sw.generations) == 2 and sw.ws_attempts == 2  # one attempt each, no hidden second generation
+    assert any("swarmui websocket ended" in r.getMessage() for r in caplog.records)
+
+
 async def test_unloading_with_a_job_running_interrupts_it(sw, tmp_path):
     sw.delay = 60
     async with running_plugin(tmp_path, SW, values(sw, wait_seconds=5), SECRETS, policy=ON) as (c, _, _):

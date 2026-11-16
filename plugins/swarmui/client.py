@@ -222,6 +222,7 @@ class Swarm:
         headers = {"Cookie": f"swarm_token={s.token}"} if s.token else {}
         images: list[str] = []
         failed = False
+        ended, skipped = "closed", 0
         try:
             async with self._http.websocket(url, headers=headers, max_message_size_bytes=max(s.max_response_bytes, 8_000_000), keepalive_ping_interval_seconds=None) as ws:
                 await ws.send_json({**params, "session_id": session.session_id})
@@ -230,8 +231,13 @@ class Swarm:
                         msg = await ws.receive_json(timeout=s.job_timeout)
                     except (TimeoutError, asyncio.TimeoutError):
                         raise
-                    except Exception as e:  # noqa: BLE001 - the client's disconnect exceptions end the stream
-                        if type(e).__name__ in ("WebSocketDisconnect", "WebSocketNetworkError", "EndOfStream", "WebSocketInvalidTypeReceived"):
+                    except Exception as e:  # noqa: BLE001 - classified by name: only a closed connection ends the stream
+                        name = type(e).__name__
+                        if name == "WebSocketInvalidTypeReceived" or isinstance(e, ValueError):
+                            skipped += 1  # a frame that is not JSON text (a binary preview, for example) is not the end of the generation
+                            continue
+                        if name in ("WebSocketDisconnect", "WebSocketNetworkError", "EndOfStream"):
+                            ended = name
                             break
                         raise
                     if not isinstance(msg, dict):
@@ -262,6 +268,7 @@ class Swarm:
             if _tls(e):
                 raise SwarmError("SwarmUI's certificate was not accepted for the WebSocket. Check ca_certificate.") from None
             raise SwarmError("The connection to SwarmUI failed during generation. Check the base_url setting.") from None
+        self._log.info("swarmui websocket ended: %s, %d image(s), %d frame(s) skipped", ended, len(images), skipped)  # names and counts only, never SwarmUI's text
         if failed and not images:
             raise SwarmError("SwarmUI reported an error for that request.")
         return images

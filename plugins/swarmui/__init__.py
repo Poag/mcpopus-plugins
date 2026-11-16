@@ -26,6 +26,8 @@ HARMLESS_PERMISSIONS = frozenset(NEEDED_PERMISSIONS) | {"fundamental", "read_use
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _PERM = re.compile(r"^[a-z0-9_]{1,60}$")
 MAX_JOBS_KEPT = 50
+LOST_TEXT = ("The connection to SwarmUI closed before an image was reported. SwarmUI may still have finished it: look in list_images (the folder raw, "
+             "then today's date) for the newest image. Nothing was started a second time.")
 
 
 class Config(BaseModel):
@@ -126,7 +128,7 @@ class Job:
     height: int
     count: int
     created: float = field(default_factory=time.time)
-    state: str = "queued"  # queued, running, done, failed, cancelled
+    state: str = "queued"  # queued, running, done, failed, cancelled, lost
     percent: float | None = None
     images: list[str] = field(default_factory=list)
     hidden: int = 0
@@ -473,7 +475,8 @@ class SwarmUIPlugin(Plugin):
         job.state = "running"
         try:
             async with asyncio.timeout(cfg.job_timeout_seconds):
-                if cfg.progress_updates and importlib.util.find_spec("wsproto") is not None:
+                via_ws = cfg.progress_updates and importlib.util.find_spec("wsproto") is not None
+                if via_ws:
                     got = await self.sw.generate_ws(payload, lambda p: setattr(job, "percent", p))
                 else:
                     got = await self.sw.generate_http(payload)
@@ -481,9 +484,13 @@ class SwarmUIPlugin(Plugin):
             job.images, job.hidden = shown, len(got) - len(shown)
             if shown:
                 job.state = "cancelled" if job.cancel_requested else "done"
+            elif job.cancel_requested:
+                job.state = "cancelled"
+            elif via_ws and not got:
+                # the stream ended with no image and no error: SwarmUI may well have finished it, so this is not reported as a failure
+                job.state, job.error = "lost", LOST_TEXT
             else:
-                job.state = "cancelled" if job.cancel_requested else "failed"
-                job.error = "" if job.cancel_requested else "SwarmUI finished without returning an image."
+                job.state, job.error = "failed", "SwarmUI finished without returning an image."
         except asyncio.CancelledError:
             job.state, job.error = "cancelled", ""
             raise
@@ -503,7 +510,7 @@ class SwarmUIPlugin(Plugin):
 
     @tool(tier="read", untrusted=True)
     async def get_generation(self, job_id: str) -> str:
-        """Check a generation started by generate_image: queued, running (with progress when available), done (with image paths), failed or cancelled."""
+        """Check a generation started by generate_image: queued, running (with progress when available), done (with image paths), failed, cancelled, or lost (the connection closed before an image was reported, so the image may still exist)."""
         jid = str(job_id or "").strip().lower()
         job = self.jobs.get(jid) if JOB_ID_RE.fullmatch(jid) else None
         if job is None:

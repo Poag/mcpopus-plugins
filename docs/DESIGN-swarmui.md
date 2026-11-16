@@ -96,7 +96,7 @@ the limit (never echoing a hostile prompt).
 3. **Parameter allow list.** Only the named arguments plus `allowed_parameters` (default empty) are sent. No init image, no output path,
    no ControlNet or image prompting, no backend selection, no video or audio parameters in version 1.
 4. **Size limits** (settings): images per call (default 2, at most 8), pixels per image (default 1 MP, at most 4 MP), width and height
-   multiples of 64 within the model's range, steps (default at most 40), `cfg_scale` within the parameter's range.
+   multiples of 8 between 64 and 4096 within the ranges SwarmUI lists, steps (default at most 40), `cfg_scale` within the parameter's range.
 5. **Concurrency and rate**: one running job by default (`max_concurrent_jobs`, at most 4), a generations-per-hour limit, and a
    per-minute limit, on top of the host's own. A queue length check against `GetCurrentStatus`: refuse when Swarm already has more than
    `max_queue` waiting.
@@ -248,4 +248,33 @@ All three phases were built in one go at Alex's request, with the defaults in th
   history model policy, the interrupt scope, the teardown interrupt, and the no-silent-fallback rule.
 - Not tested: the job timeout (30 seconds at least, too slow for the suite); any real SwarmUI; large real images; behaviour with the
   release in use of the parameter ids and the `GenerateText2Image` reply when the backend is down.
+
+## 15. First live runs (10 and 16 November 2026) and what they changed
+
+Alex's SwarmUI: 0.9.8.4 (builds `70b9a9c7`, then `d347f306`), account protection off, the connector running as the owner account `local`
+(65 permissions, `status` warned), no `auth_token`, `allow_prompt_syntax` on, and limits tighter than the defaults (1 image, 2 a minute). Those are
+the owner's settings and were not changed. Checklist steps run live: 1 to 4, 5 (unknown model only, no deny list is set), 9 (size and count refused
+before anything was sent), and 6 (generation, below). Not yet run live: 7 (cannot be tested while `allow_prompt_syntax` is on), 8, 10, 11, 12.
+
+Verified live: the WebSocket line says on; progress is reported over the WebSocket; the refusals above; `describe_model` and `list_models`.
+
+Found, with the evidence:
+
+1. **A generation that SwarmUI finished was reported as failed.** The job reached 70 percent, stayed there, then showed `failed: SwarmUI finished
+   without returning an image`, while the image was saved (`View/local/raw/2026-11-16/0859001-...png`, the minute the job started). The host log had no
+   `swarmui websocket failed` line, so the stream ended through the quiet branch, which treated a frame that is not JSON text as the end of the stream.
+   The exact frame is not known. Decision: a frame that is not JSON text is skipped (bounded), the end of the stream is logged by exception name
+   only, and a stream that ends with no image is a new state, `lost`, not `failed`: "the connection closed before an image was reported; SwarmUI may
+   have finished it; look in list_images". The plugin never starts a second generation to find out. The HTTP route keeps `failed` for an empty reply.
+2. **History links were wrong.** SwarmUI returns each image path relative to the folder that was listed, and the plugin built the link from that
+   alone, so `raw/2026-11-16` gave `View/<file>`. The working form is `View/<user>/<folder>/<file>` (`View/local/Wall/00003-1477159600.png` opens).
+   The user segment is the session's `user_id`.
+3. **`list_images` did not show recent images.** The default listing (root, depth 2, sorted by date) started with an old `Wall/` folder, and the
+   `raw` listing started in March; SwarmUI appears to sort within each folder, not across the listing. Decision: with no folder given, read the
+   folder names under `raw` (documented `folders` field), take the newest dated ones, and list each with names sorted in reverse (the file names start with the time).
+   A folder argument keeps working and is now combined into the link.
+4. **Display:** a LoRA with no standard size showed `0x0`; text parameters showed `min 0.0 | max 0.0`. Both now show `-`.
+
+Open: whether `View/Wall/...` without the user segment also works (not needed); what the quiet end of the stream really was (the log line added in
+0.1.2 will say next time).
 

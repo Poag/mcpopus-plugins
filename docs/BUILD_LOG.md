@@ -3,6 +3,17 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-16: swarmui 0.1.2 (first live runs: a finished generation was reported as failed)
+
+Live runs on the owner's SwarmUI 0.9.8.4 are recorded in DESIGN-swarmui.md section 15 (what ran, what was found, what was not run). Fix in this version: a WebSocket
+frame that is not JSON text (or text that is not valid JSON) is skipped and no longer ends the stream, and a stream that ends with no image and no error is the new job
+state `lost` ("the connection closed before an image was reported ... look in list_images"), not `failed`. The end of every stream is logged by exception name and counts only.
+A lost job does not hold a concurrency slot and nothing is ever started a second time. The HTTP route still reports `failed` for an empty reply.
+Tests: two new in `tests/test_swarmui_generate.py` (the fake gained `ws_odd_frames` and `ws_drop_before_image`). Mutation checks, each made a test fail on the intended assertion:
+non-JSON frames ending the stream again; `lost` reported as `failed`. **Not verified:** that a binary or non-JSON frame is what ended the owner's stream (the host log had no
+websocket failure line, which fits a quiet end; the new log line will show the exact reason next time), and the fix against the real SwarmUI. History links and ordering are
+the next version. CI for this commit not yet seen.
+
 ## 2026-11-11: homeassistant 0.8.0 (allow_own_helpers: use what Claude creates without list entries)
 
 Alex asked whether Claude can use what it creates without adding it to the lists, or whether the lists could take wildcards.
