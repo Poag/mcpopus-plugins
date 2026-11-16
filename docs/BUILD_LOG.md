@@ -3,6 +3,16 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-16: swarmui 0.1.3 (history: right links, newest images, display of zero values)
+
+From the same live runs (DESIGN-swarmui.md section 15, findings 2 to 4). `list_images` builds links as `View/<user>/<folder>/<file>` (a folder listing's paths are relative to that folder; the working
+form was confirmed by the owner opening `View/local/Wall/...`), and with no folder it reads the newest dated folders under `raw` (up to 7, names sorted in reverse) instead of the root listing, falling back to the
+root when `raw` has no folders. A LoRA or model SwarmUI reports as 0x0 shows `-`; text and model parameters show `-` for min and max. The fake's history is now a real-shaped tree (paths relative to the listed folder,
+a `folders` field, date sorting inside each folder only). Tests: two new in `tests/test_swarmui.py`, one updated. Mutation checks, each made a test fail: link without the user, dated folders ignored, folder dropped from the path,
+zero sizes shown, zero limits shown. **Not verified live:** that `ListImages` with `depth` 0 on `raw` returns the date folders in `folders` (the documentation says it has that field; the reply's exact shape is assumed to
+be plain folder names), and the new ordering against the owner's real history. If the folder names come back differently, `list_images` falls back to the root listing, which still works but is not newest-first.
+CI for this commit not yet seen.
+
 ## 2026-11-16: swarmui 0.1.2 (first live runs: a finished generation was reported as failed)
 
 Live runs on the owner's SwarmUI 0.9.8.4 are recorded in DESIGN-swarmui.md section 15 (what ran, what was found, what was not run). Fix in this version: a WebSocket

@@ -275,6 +275,8 @@ Found, with the evidence:
    A folder argument keeps working and is now combined into the link.
 4. **Display:** a LoRA with no standard size showed `0x0`; text parameters showed `min 0.0 | max 0.0`. Both now show `-`.
 
+Findings 2 to 4 are built in 0.1.3, finding 1 in 0.1.2.
+
 Open: whether `View/Wall/...` without the user segment also works (not needed); what the quiet end of the stream really was (the log line added in
 0.1.2 will say next time).
 

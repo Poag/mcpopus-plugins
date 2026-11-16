@@ -26,6 +26,7 @@ HARMLESS_PERMISSIONS = frozenset(NEEDED_PERMISSIONS) | {"fundamental", "read_use
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _PERM = re.compile(r"^[a-z0-9_]{1,60}$")
 MAX_JOBS_KEPT = 50
+HISTORY_DAYS = 7  # dated folders read when list_images is given no folder
 LOST_TEXT = ("The connection to SwarmUI closed before an image was reported. SwarmUI may still have finished it: look in list_images (the folder raw, "
              "then today's date) for the newest image. Nothing was started a second time.")
 
@@ -170,6 +171,13 @@ class SwarmUIPlugin(Plugin):
             return ""
         return f"{base}/" + quote(path if path.startswith("View/") else f"View/{path}", safe="/")
 
+    def _history_link(self, user: str, full: str) -> str:
+        """A link for a history file. SwarmUI serves it at View/<user>/<path from the history root> (confirmed live), and `full` is that path."""
+        base = self.ctx.config.public_url
+        if not base or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,60}", user):
+            return ""
+        return f"{base}/" + quote(f"View/{user}/{full}", safe="/")
+
     def _limit(self, limit: int) -> int:
         cap = self.ctx.config.max_results
         return cap if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0 else min(limit, cap)
@@ -233,7 +241,8 @@ class SwarmUIPlugin(Plugin):
             head += f" Use offset {offset + len(page)} for the next page."
         rows = []
         for f in page:
-            size = f"{f['standard_width']}x{f['standard_height']}" if isinstance(f.get("standard_width"), int) and isinstance(f.get("standard_height"), int) else "-"
+            sw_, sh_ = f.get("standard_width"), f.get("standard_height")
+            size = f"{sw_}x{sh_}" if isinstance(sw_, int) and isinstance(sh_, int) and not isinstance(sw_, bool) and sw_ > 0 and sh_ > 0 else "-"  # SwarmUI says 0x0 when a model has no standard size
             rows.append(f"- {tx.clean(f['name'], 200)} | {tx.clean(f.get('class') or f.get('architecture') or '-', 40)} | {size}" + (" | loaded" if f.get("loaded") is True else ""))
         return "\n".join([head, *rows])
 
@@ -282,39 +291,59 @@ class SwarmUIPlugin(Plugin):
                 lines.append(f"- {pid} | not offered by this SwarmUI" if pid in cfg.allowed_parameters else f"- {pid} | (built in)")
                 continue
             vals = p.get("values") if isinstance(p.get("values"), list) else None
-            lines.append(f"- {pid} | {tx.clean(p.get('type', '-'), 20)} | default {tx.clean(p.get('default', '-'), 40)} | min {tx.clean(p.get('min', '-'), 12)} | max {tx.clean(p.get('max', '-'), 12)}"
+            numeric = p.get("type") in ("integer", "decimal")  # SwarmUI sends 0 and 0 for text and model parameters, which are not limits
+            lines.append(f"- {pid} | {tx.clean(p.get('type', '-'), 20)} | default {tx.clean(p.get('default', '-'), 40)} | min {tx.clean(p.get('min', '-') if numeric else '-', 12)} | max {tx.clean(p.get('max', '-') if numeric else '-', 12)}"
                          + (f" | values: {', '.join(tx.clean(v, 30) for v in vals[:12])}" if vals else "") + f" | {tx.clean(p.get('description', ''), 120)}")
         lines.append(f"Limits here: images 1 to {cfg.max_images_per_call}; pixels at most {cfg.max_pixels}; width and height multiples of 8; steps at most {cfg.max_steps}; seed -1 for random.")
         return "\n".join(lines)
 
     @tool(tier="read", untrusted=True)
     async def list_images(self, folder: str = "", contains: str = "", limit: int = 0) -> str:
-        """List recent images in the account's history, newest first: path, model, size and the start of the prompt. folder: a sub-folder; contains: text the file or prompt must contain."""
+        """List recent images in the account's history, newest first: path, model, size and the start of the prompt. folder: a sub-folder (for example raw/2026-11-16); contains: text the file name or prompt must contain."""
         folder = str(folder or "").strip().strip("/")
         contains = str(contains or "").strip()
         if len(contains) > 100 or (folder and (".." in folder or not safe_image_path(folder))):
             raise ToolError("folder must be a plain relative folder name, and contains is limited to 100 characters.")
         limit = self._limit(limit)
-        data = await self._guard(self.sw.images(folder, 2, contains))
+        user = tx.clean((await self._guard(self.sw.session())).user_id, 60)
+        batches: list[tuple[str, dict]] = []  # (folder the paths are relative to, SwarmUI's answer)
+        if folder:
+            batches.append((folder, await self._guard(self.sw.images(folder, 2, contains))))
+        else:
+            # SwarmUI orders inside each folder, not across the listing, so the newest images are found by reading the newest dated folders under raw
+            days = sorted(await self._guard(self.sw.subfolders("raw")), reverse=True)[:HISTORY_DAYS]
+            rows_so_far = 0
+            for day in days:
+                data = await self._guard(self.sw.images(f"raw/{day}", 2, contains, sort="Name"))
+                batches.append((f"raw/{day}", data))
+                rows_so_far += len(data.get("files", [])) if isinstance(data.get("files"), list) else 0
+                if rows_so_far >= limit * 2:  # enough to fill the page even if the model policy hides some
+                    break
+            if not days:
+                batches.append(("", await self._guard(self.sw.images("", 2, contains))))
         rows = []
-        for f in data.get("files", []) if isinstance(data.get("files"), list) else []:
-            src = safe_image_path(f.get("src")) if isinstance(f, dict) else None
-            if not src:
-                continue
-            params = {}
-            meta = f.get("metadata")
-            if isinstance(meta, str) and meta[:1] == "{" and len(meta) < 200_000:
-                try:
-                    parsed = json.loads(meta).get("sui_image_params")
-                    params = parsed if isinstance(parsed, dict) else {}
-                except ValueError:
-                    params = {}
-            model = params.get("model")
-            if isinstance(model, str) and model and not self.policy.visible(model):
-                continue  # an image made with a model this connector may not see is left out
-            size = f"{params['width']}x{params['height']}" if params.get("width") and params.get("height") else "-"
-            link = self._link(src)
-            rows.append(f"- {src} | {tx.clean(model or '-', 80)} | {tx.clean(size, 20)} | prompt: {tx.clean(params.get('prompt', ''), 100)}" + (f" | {link}" if link else ""))
+        for base, data in batches:
+            for f in data.get("files", []) if isinstance(data.get("files"), list) else []:
+                src = safe_image_path(f.get("src")) if isinstance(f, dict) else None
+                if not src:
+                    continue
+                full = f"{base}/{src}" if base else src
+                params = {}
+                meta = f.get("metadata")
+                if isinstance(meta, str) and meta[:1] == "{" and len(meta) < 200_000:
+                    try:
+                        parsed = json.loads(meta).get("sui_image_params")
+                        params = parsed if isinstance(parsed, dict) else {}
+                    except ValueError:
+                        params = {}
+                model = params.get("model")
+                if isinstance(model, str) and model and not self.policy.visible(model):
+                    continue  # an image made with a model this connector may not see is left out
+                size = f"{params['width']}x{params['height']}" if params.get("width") and params.get("height") else "-"
+                link = self._history_link(user, full)
+                rows.append(f"- {full} | {tx.clean(model or '-', 80)} | {tx.clean(size, 20)} | prompt: {tx.clean(params.get('prompt', ''), 100)}" + (f" | {link}" if link else ""))
+                if len(rows) >= limit:
+                    break
             if len(rows) >= limit:
                 break
         return "\n".join([f"{len(rows)} image(s), newest first.", *rows])

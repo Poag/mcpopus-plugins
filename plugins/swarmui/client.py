@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -201,11 +202,19 @@ class Swarm:
         self._params = (time.monotonic(), out)
         return out
 
-    async def images(self, path: str, depth: int, text_filter: str) -> dict[str, Any]:
-        payload: dict[str, Any] = {"path": path, "depth": depth, "sortBy": "Date", "sortReverse": True}
+    async def images(self, path: str, depth: int, text_filter: str, sort: str = "Date") -> dict[str, Any]:
+        """One folder of the history. Each file's src is relative to `path`, not to the history root."""
+        payload: dict[str, Any] = {"path": path, "depth": depth, "sortBy": sort, "sortReverse": True}
         if text_filter:
             payload["filter"] = text_filter
         return await self._post("ListImages", payload)
+
+    async def subfolders(self, path: str) -> list[str]:
+        """Names of the folders directly inside `path` (SwarmUI's `folders` field), reduced to a last path component and checked."""
+        data = await self._post("ListImages", {"path": path, "depth": 0, "sortBy": "Name", "sortReverse": True})
+        names = data.get("folders")
+        out = [n.rsplit("/", 1)[-1] for n in names if isinstance(n, str)] if isinstance(names, list) else []
+        return [n for n in out if re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", n) and ".." not in n]
 
     # -------------------------------------------------------------- generation
     async def generate_http(self, params: dict[str, Any]) -> list[str]:
