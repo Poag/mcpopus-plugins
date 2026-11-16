@@ -10,6 +10,7 @@ import secrets
 import ssl
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -310,20 +311,30 @@ class SwarmUIPlugin(Plugin):
         if folder:
             batches.append((folder, await self._guard(self.sw.images(folder, 2, contains))))
         else:
-            # SwarmUI orders inside each folder, not across the listing, so the newest images are found by reading the newest dated folders under raw
-            days = sorted(await self._guard(self.sw.subfolders("raw")), reverse=True)[:HISTORY_DAYS]
-            rows_so_far = 0
-            for day in days:
-                data = await self._guard(self.sw.images(f"raw/{day}", 2, contains, sort="Name"))
-                batches.append((f"raw/{day}", data))
-                rows_so_far += len(data.get("files", [])) if isinstance(data.get("files"), list) else 0
-                if rows_so_far >= limit * 2:  # enough to fill the page even if the model policy hides some
-                    break
-            if not days:
+            # SwarmUI orders inside each folder, not across the listing, and not reliably inside one either (seen live), so the newest images are found by
+            # reading the dated folders under raw, today first. Their names come from the clock (SwarmUI's default layout), not from SwarmUI's folder list.
+            today = datetime.now(timezone.utc).date()
+            seen = 0
+            for back in range(-1, HISTORY_DAYS):  # tomorrow in UTC too, in case SwarmUI's clock is ahead
+                day = (today - timedelta(days=back)).isoformat()
+                try:
+                    data = await self.sw.images(f"raw/{day}", 2, contains, sort="Name")
+                except SwarmError:
+                    continue  # a day with no folder may be an error or an empty answer; either way there is nothing there
+                files = data.get("files") if isinstance(data.get("files"), list) else []
+                if files:
+                    batches.append((f"raw/{day}", data))
+                    seen += len(files)
+                    if seen >= limit * 2:  # enough to fill the page even if the model policy hides some
+                        break
+            if not batches:
                 batches.append(("", await self._guard(self.sw.images("", 2, contains))))
         rows = []
         for base, data in batches:
-            for f in data.get("files", []) if isinstance(data.get("files"), list) else []:
+            files = data.get("files", []) if isinstance(data.get("files"), list) else []
+            if base == "raw" or base.startswith("raw/"):  # these names start with the time, so the newest sorts last
+                files = sorted(files, key=lambda f: str(f.get("src")) if isinstance(f, dict) else "", reverse=True)
+            for f in files:
                 src = safe_image_path(f.get("src")) if isinstance(f, dict) else None
                 if not src:
                     continue

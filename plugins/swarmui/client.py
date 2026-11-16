@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -209,13 +208,6 @@ class Swarm:
             payload["filter"] = text_filter
         return await self._post("ListImages", payload)
 
-    async def subfolders(self, path: str) -> list[str]:
-        """Names of the folders directly inside `path` (SwarmUI's `folders` field), reduced to a last path component and checked."""
-        data = await self._post("ListImages", {"path": path, "depth": 0, "sortBy": "Name", "sortReverse": True})
-        names = data.get("folders")
-        out = [n.rsplit("/", 1)[-1] for n in names if isinstance(n, str)] if isinstance(names, list) else []
-        return [n for n in out if re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", n) and ".." not in n]
-
     # -------------------------------------------------------------- generation
     async def generate_http(self, params: dict[str, Any]) -> list[str]:
         data = await self._post("GenerateText2Image", params, long=True)
@@ -246,7 +238,8 @@ class Swarm:
                             skipped += 1  # a frame that is not JSON text (a binary preview, for example) is not the end of the generation
                             continue
                         if name in ("WebSocketDisconnect", "WebSocketNetworkError", "EndOfStream"):
-                            ended = name
+                            code = getattr(e, "code", None)
+                            ended = name + (f" (close code {code})" if isinstance(code, int) and not isinstance(code, bool) else "")  # the code is a number; the reason text is SwarmUI's and is not logged
                             break
                         raise
                     if not isinstance(msg, dict):

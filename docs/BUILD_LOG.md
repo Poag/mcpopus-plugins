@@ -3,6 +3,14 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-16: swarmui 0.1.4 (second live run: history ordering without SwarmUI's folder list; close code logged)
+
+DESIGN-swarmui.md section 15.1. `list_images` with no folder reads the dated folders under `raw` named from the UTC clock (tomorrow to six days back; a missing folder, whether SwarmUI answers an error or an empty list, is skipped;
+the root listing is the fallback) and sorts those files by name, newest first, itself, because SwarmUI's sort was not honoured even inside one folder. The generation WebSocket log line now includes the close code (number only; the close reason
+is SwarmUI's text and is not logged). Tests: one rewritten and one extended; the fake now names its history folders from the clock, can answer an error for a missing folder, can ignore the sort, and can close with a chosen code and reason.
+Mutation checks, each made a test fail on the intended assertion: no name sort, dated folders not tried, a missing folder raising, today-only, and the close reason logged. **Not verified live:** 0.1.4; why the stream closes before the image message
+(the close code will show it); the quiet-connection hypothesis. No ping or recovery change was made because neither can be tested here. CI for this commit not yet seen.
+
 ## 2026-11-16: swarmui 0.1.3 (history: right links, newest images, display of zero values)
 
 From the same live runs (DESIGN-swarmui.md section 15, findings 2 to 4). `list_images` builds links as `View/<user>/<folder>/<file>` (a folder listing's paths are relative to that folder; the working

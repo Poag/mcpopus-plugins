@@ -272,11 +272,26 @@ Found, with the evidence:
 3. **`list_images` did not show recent images.** The default listing (root, depth 2, sorted by date) started with an old `Wall/` folder, and the
    `raw` listing started in March; SwarmUI appears to sort within each folder, not across the listing. Decision: with no folder given, read the
    folder names under `raw` (documented `folders` field), take the newest dated ones, and list each with names sorted in reverse (the file names start with the time).
-   A folder argument keeps working and is now combined into the link.
+   A folder argument keeps working and is now combined into the link. (The `folders` field turned out not to give the date folders; superseded in 0.1.4, see 15.1.)
 4. **Display:** a LoRA with no standard size showed `0x0`; text parameters showed `min 0.0 | max 0.0`. Both now show `-`.
 
 Findings 2 to 4 are built in 0.1.3, finding 1 in 0.1.2.
 
 Open: whether `View/Wall/...` without the user segment also works (not needed); what the quiet end of the stream really was (the log line added in
 0.1.2 will say next time).
+
+### 15.1 Second live run, plugin 0.1.3 (16 November 2026)
+
+Seen: the links are right (`View/local/raw/2026-11-16/...` and `View/local/Wall/...` both open). Not right, so changed in 0.1.4:
+
+- **No-folder `list_images` fell back to the root listing** (it still began with `Wall/`), so SwarmUI's `folders` answer for `raw` was not usable as assumed. Now the dated folders are
+  named from the clock (UTC today, tomorrow in case SwarmUI's clock is ahead, and the previous six days), each is read, and a day with no folder (an error or an empty answer) is skipped; with no
+  images in any of them the root listing is used.
+- **The sort asked for is not what comes back, even inside one folder:** `raw/2026-11-16` listed the 08:59 image before the 09:31 one although the plugin asked for newest first. Files under
+  `raw` are now sorted by name, newest first, by the plugin (their names start with the time).
+- **The generation again ended `lost`, not `failed`** (0.1.2 working as designed on the state): the job went 70, 73, 80 percent over several minutes (the model is slow, so earlier "stuck at 70" was slow progress),
+  then the stream closed before an image message, and the image (`0931001-a blue teapot...png`) was saved. Skipping non-JSON frames was therefore **not** the cause, or not the only one. The log line
+  now includes the close code (a number; the close reason is SwarmUI's text and is not logged): 1000 is a normal close, 1006 a dropped connection, 1011 a server error. Hypothesis, untested: something
+  between the host and SwarmUI (the owner's links go through a Tailscale proxy) closes a WebSocket that is quiet for a while. A WebSocket ping every 20 seconds would be the first thing to try, but the
+  test harness cannot observe pings, so it is not shipped until the close code confirms the cause. If it is a quiet-connection close, a second remedy is to find the finished image in the history instead.
 
