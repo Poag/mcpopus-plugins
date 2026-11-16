@@ -300,6 +300,14 @@ Seen: the links are right (`View/local/raw/2026-11-16/...` and `View/local/Wall/
 SwarmUI's own log for the teapot run: requested 09:31:53, "Generated an image in 58.29 sec", no WebSocket problem logged; the first two runs took 72 s and 58 s while the model loaded on an 8 GB RTX 4060 and a later one 7.7 s.
 A third generation through the connector, with the model warm and finishing inside the 45 second wait, was `lost` again. So the stream is not dying early or going quiet: SwarmUI finishes the image and the stream ends, and the plugin
 does not recognise the image message. The documentation (a development branch) shows `{"image": {"image": path, ...}}`; the version in use may send something else. Decision: accept the documented nested form, a plain string under `image`,
-and a list under `images`, and log the names and kinds (str, dict, list and so on, never values) of every other message that arrived (`other messages: ...`), so an unknown shape names itself in the host log. Not verified: which shape
-SwarmUI 0.9.8.4 really sends. If the log line shows none of these, the next version is written from it. The fake now sends all three shapes and an unknown one.
+and a list under `images`, and log the names and kinds (str, dict, list and so on, never values) of every other message that arrived (`other messages: ...`), so an unknown shape names itself in the host log. Which shape
+SwarmUI 0.9.8.4 really sends is still not known (see the live result below). If the log line shows none of these, the next version is written from it. The fake now sends all three shapes and an unknown one.
+
+### 15.3 Live result with 0.1.5 (16 November 2026, 10:44 UTC)
+
+One generation (a yellow lemon on a blue plate, ZIT/Z_Image_Turbo, 512x512, 8 steps, cfg 1) ended `done` with the path
+`View/local/raw/2026-11-16/1044001-a yellow lemon on a blue plate-ZITZ_Image_Turbo.png` and a working link. The model had to load again, so it ran past the 45 second wait; progress went 70, 72, 75, 77, 90, 100 percent, then `done`.
+Checklist steps 6 (generation, poll to done) and 13 (live progress) now pass. `list_images` with no folder, first five, listed that image first, then the 09:42, 09:41, 09:31 and 08:59 images, newest first, all in `raw/2026-11-16`, with correct links:
+the 0.1.4 ordering works live (the `Wall/` folder no longer comes first). Still not known: which image message shape SwarmUI sends (any of the three accepted would give this result); the host log line has not been read.
+Still not run live: steps 7 (cannot while prompt syntax is allowed), 8, 10, 11 and 12.
 
