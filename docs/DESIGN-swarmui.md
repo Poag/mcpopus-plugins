@@ -291,7 +291,15 @@ Seen: the links are right (`View/local/raw/2026-11-16/...` and `View/local/Wall/
   `raw` are now sorted by name, newest first, by the plugin (their names start with the time).
 - **The generation again ended `lost`, not `failed`** (0.1.2 working as designed on the state): the job went 70, 73, 80 percent over several minutes (the model is slow, so earlier "stuck at 70" was slow progress),
   then the stream closed before an image message, and the image (`0931001-a blue teapot...png`) was saved. Skipping non-JSON frames was therefore **not** the cause, or not the only one. The log line
-  now includes the close code (a number; the close reason is SwarmUI's text and is not logged): 1000 is a normal close, 1006 a dropped connection, 1011 a server error. Hypothesis, untested: something
+  now includes the close code (a number; the close reason is SwarmUI's text and is not logged): 1000 is a normal close, 1006 a dropped connection, 1011 a server error. Hypothesis, since replaced (see below): something
   between the host and SwarmUI (the owner's links go through a Tailscale proxy) closes a WebSocket that is quiet for a while. A WebSocket ping every 20 seconds would be the first thing to try, but the
   test harness cannot observe pings, so it is not shipped until the close code confirms the cause. If it is a quiet-connection close, a second remedy is to find the finished image in the history instead.
+
+### 15.2 The image message (plugin 0.1.5, same day)
+
+SwarmUI's own log for the teapot run: requested 09:31:53, "Generated an image in 58.29 sec", no WebSocket problem logged; the first two runs took 72 s and 58 s while the model loaded on an 8 GB RTX 4060 and a later one 7.7 s.
+A third generation through the connector, with the model warm and finishing inside the 45 second wait, was `lost` again. So the stream is not dying early or going quiet: SwarmUI finishes the image and the stream ends, and the plugin
+does not recognise the image message. The documentation (a development branch) shows `{"image": {"image": path, ...}}`; the version in use may send something else. Decision: accept the documented nested form, a plain string under `image`,
+and a list under `images`, and log the names and kinds (str, dict, list and so on, never values) of every other message that arrived (`other messages: ...`), so an unknown shape names itself in the host log. Not verified: which shape
+SwarmUI 0.9.8.4 really sends. If the log line shows none of these, the next version is written from it. The fake now sends all three shapes and an unknown one.
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,22 @@ import httpx2
 AUTH_PAUSE = 60.0
 MODELS_TTL = 30.0
 PARAMS_TTL = 300.0
+
+
+_KEY_RE = re.compile(r"[a-z_]{1,30}")
+
+
+def _image_paths(msg: dict) -> list[str]:
+    """The saved image paths in one WebSocket message. The documentation shows {"image": {"image": path}}; a plain string and a list under "images" are accepted too, as SwarmUI has changed this shape before."""
+    out: list[str] = []
+    for key in ("image", "images"):
+        val = msg.get(key)
+        for item in val if isinstance(val, list) else [val]:
+            if isinstance(item, dict):
+                item = item.get("image")
+            if isinstance(item, str):
+                out.append(item)
+    return out
 
 
 class SwarmError(Exception):
@@ -224,6 +241,7 @@ class Swarm:
         images: list[str] = []
         failed = False
         ended, skipped = "closed", 0
+        seen: dict[str, str] = {}
         try:
             async with self._http.websocket(url, headers=headers, max_message_size_bytes=max(s.max_response_bytes, 8_000_000), keepalive_ping_interval_seconds=None) as ws:
                 await ws.send_json({**params, "session_id": session.session_id})
@@ -253,9 +271,10 @@ class Swarm:
                     prog = msg.get("gen_progress")
                     if isinstance(prog, dict) and isinstance(prog.get("overall_percent"), (int, float)):
                         on_progress(max(0.0, min(1.0, float(prog["overall_percent"]))))
-                    img = msg.get("image")
-                    if isinstance(img, dict) and isinstance(img.get("image"), str):
-                        images.append(img["image"])
+                    for key, val in msg.items():  # which messages arrived, by name and kind only (never a value), so an unexpected shape shows in the log
+                        if isinstance(key, str) and _KEY_RE.fullmatch(key) and key not in ("status", "backend_status", "supported_features", "gen_progress"):
+                            seen[key] = type(val).__name__ if type(val).__name__ in ("str", "dict", "list", "int", "float", "bool", "NoneType") else "other"
+                    images.extend(_image_paths(msg))
         except Exception as e0:  # noqa: BLE001 - the WebSocket client raises groups of exceptions; classify the first real one
             e: BaseException = e0
             while isinstance(e, BaseExceptionGroup) and e.exceptions:
@@ -270,7 +289,8 @@ class Swarm:
             if _tls(e):
                 raise SwarmError("SwarmUI's certificate was not accepted for the WebSocket. Check ca_certificate.") from None
             raise SwarmError("The connection to SwarmUI failed during generation. Check the base_url setting.") from None
-        self._log.info("swarmui websocket ended: %s, %d image(s), %d frame(s) skipped", ended, len(images), skipped)  # names and counts only, never SwarmUI's text
+        self._log.info("swarmui websocket ended: %s, %d image(s), %d frame(s) skipped; other messages: %s", ended, len(images), skipped,
+                       ", ".join(f"{k}={v}" for k, v in sorted(seen.items())[:12]) or "none")  # names and counts only, never SwarmUI's text
         if failed and not images:
             raise SwarmError("SwarmUI reported an error for that request.")
         return images

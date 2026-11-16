@@ -85,6 +85,7 @@ class FakeSwarm:
         self.ws_reject_session = False  # make only the WebSocket say the session is invalid
         self.ws_attempts = 0
         self.ws_odd_frames = False  # send a binary frame and a text frame that is not JSON between the messages
+        self.ws_image_shape = "nested"  # nested: {image: {image: path}} as documented; string: {image: path}; list: {images: [path]}; other: a shape the plugin does not know
         self.ws_close_code = 1000
         self.ws_close_reason = ""
         self.ws_drop_before_image = False  # close the stream after the progress messages, with no image and no error
@@ -205,8 +206,14 @@ class FakeSwarm:
                 await ws.close(code=self.ws_close_code, reason=self.ws_close_reason)
                 return
             if not self.empty_result:
-                for i, path in enumerate(self._paths(int(body.get("images", 1)))):
-                    await ws.send_json({"image": {"image": path, "batch_index": str(i), "metadata": "{}"}})
+                paths = self._paths(int(body.get("images", 1)))
+                if self.ws_image_shape == "list":
+                    await ws.send_json({"images": paths})
+                elif self.ws_image_shape == "other":
+                    await ws.send_json({"result": {"file": paths[0]}, "finished": True})
+                else:
+                    for i, path in enumerate(paths):
+                        await ws.send_json({"image": path if self.ws_image_shape == "string" else {"image": path, "batch_index": str(i), "metadata": "{}"}})
             await ws.close()
         except WebSocketDisconnect:
             pass

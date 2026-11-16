@@ -3,6 +3,13 @@
 Dated entries. "Verified" means the source named was read on the date given. Anything not verified is under "Unverified" and is written
 so that it is easy to change. The host's own log is `docs/BUILD_LOG.md` in the mcpopus repository.
 
+## 2026-11-16: swarmui 0.1.5 (the image message: accept more shapes, log the names of the others)
+
+DESIGN-swarmui.md section 15.2. The owner's SwarmUI log showed the generation finishing normally while the plugin reported `lost`, also with a warm model inside the wait, so the stream ended after the image and the plugin did not recognise the image message.
+`generate_ws` now takes `{"image": {"image": path}}` (documented), `{"image": path}` and `{"images": [path or {"image": path}]}`, and the end-of-stream log line lists the other message names with their kinds, never values. Tests: three shapes (parametrised), one unknown
+shape (lost, names logged, no value in the log), the earlier log assertions extended; the fake sends each shape. Mutation checks, each made tests fail on the intended assertions: documented shape only, no `images` list, values logged. **Not verified live:** which shape SwarmUI 0.9.8.4
+sends; 0.1.5 itself. CI for this commit not yet seen.
+
 ## 2026-11-16: swarmui 0.1.4 (second live run: history ordering without SwarmUI's folder list; close code logged)
 
 DESIGN-swarmui.md section 15.1. `list_images` with no folder reads the dated folders under `raw` named from the UTC clock (tomorrow to six days back; a missing folder, whether SwarmUI answers an error or an empty list, is skipped;

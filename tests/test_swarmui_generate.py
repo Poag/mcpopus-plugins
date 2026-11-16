@@ -250,7 +250,25 @@ async def test_frames_that_are_not_json_do_not_end_the_generation(sw, tmp_path, 
         _, t = await gen(c)
         assert "done" in t and "View/local/raw/2026-11-08/" in t and "failed" not in t and "lost" not in t
     assert len(sw.generations) == 1
-    assert "swarmui websocket ended: WebSocketDisconnect (close code 1000), 1 image(s), 4 frame(s) skipped" in caplog.text
+    assert "swarmui websocket ended: WebSocketDisconnect (close code 1000), 1 image(s), 4 frame(s) skipped; other messages: image=dict" in caplog.text
+
+
+@pytest.mark.parametrize("shape", ["nested", "string", "list"])
+async def test_the_image_message_is_understood_in_each_shape_swarmui_has_used(sw, tmp_path, shape):
+    # seen live: SwarmUI 0.9.8.4 finished the image and the stream closed, but the plugin saw none, so the documented shape is not the only one
+    sw.ws_image_shape = shape
+    async with running_plugin(tmp_path, SW, values(sw, progress_updates=True), SECRETS, policy=ON) as (c, _, _):
+        _, t = await gen(c)
+        assert "done" in t and "View/local/raw/2026-11-08/" in t and "lost" not in t
+
+
+async def test_an_unknown_image_message_is_lost_and_its_names_are_logged_without_values(sw, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    sw.ws_image_shape = "other"
+    async with running_plugin(tmp_path, SW, values(sw, progress_updates=True), SECRETS, policy=ON) as (c, _, _):
+        _, t = await gen(c)
+        assert "lost" in t
+    assert "other messages: finished=bool, result=dict" in caplog.text and "View/local/raw" not in caplog.text.split("swarmui websocket ended")[-1]
 
 
 async def test_a_stream_that_ends_without_an_image_is_lost_not_failed_and_never_rerun(sw, tmp_path, caplog):
